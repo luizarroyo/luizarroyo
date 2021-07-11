@@ -1,0 +1,563 @@
+00000000% VERSION   1.3;   SAVED 20041122 14:19:04                    |GHJ
+00100000 $ SET LIST LEVEL 2 LINEINFO TARGET=LEVEL2 INSTALLATION 1
+00100100%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00100200%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00100300%%%%%%%%                                                        %%%%%%%%
+00100400%%%%%%%%                                                        %%%%%%%%
+00100500%%%%%%%%           @@@@@@@@    @@@@@@@@     @@@@@@@@            %%%%%%%%
+00100600%%%%%%%%           @@@@@@@@@   @@@@@@@@@   @@@@@@@@@@           %%%%%%%%
+00100700%%%%%%%%           @@      @@  @@     @@@  @@      @@           %%%%%%%%
+00100800%%%%%%%%           @@      @@  @@     @@@  @@      @@           %%%%%%%%
+00100900%%%%%%%%           @@      @@  @@@@@@@@@   @@@@@@@@@@           %%%%%%%%
+00101000%%%%%%%%           @@      @@  @@@@@@@@@   @@@@@@@@@@           %%%%%%%%
+00101100%%%%%%%%           @@      @@  @@     @@@  @@      @@           %%%%%%%%
+00101200%%%%%%%%           @@      @@  @@     @@@  @@      @@           %%%%%%%%
+00101300%%%%%%%%           @@@@@@@@@   @@@@@@@@@   @@      @@           %%%%%%%%
+00101400%%%%%%%%           @@@@@@@@    @@@@@@@@    @@      @@           %%%%%%%%
+00101500%%%%%%%%                                                        %%%%%%%%
+00101600%%%%%%%%                                                        %%%%%%%%
+00101700%%%%%%%%           @@@@@@@@@@      @@  @@      @@  @@           %%%%%%%%
+00101800%%%%%%%%           @@@@@@@@@@     @@   @@     @@   @@           %%%%%%%%
+00101900%%%%%%%%           @@            @@    @@    @@    @@           %%%%%%%%
+00102000%%%%%%%%           @@           @@     @@   @@     @@           %%%%%%%%
+00102100%%%%%%%%           @@@@@@@@    @@@@@@@@@@  @@@@@@@@@@           %%%%%%%%
+00102200%%%%%%%%           @@@@@@@@@   @@@@@@@@@@  @@@@@@@@@@           %%%%%%%%
+00102300%%%%%%%%                   @@          @@          @@           %%%%%%%%
+00102400%%%%%%%%           @@@    @@@          @@          @@           %%%%%%%%
+00102500%%%%%%%%            @@@@@@@@           @@          @@           %%%%%%%%
+00102600%%%%%%%%             @@@@@@            @@          @@           %%%%%%%%
+00102700%%%%%%%%                                                        %%%%%%%%
+00102800%%%%%%%%                                                        %%%%%%%%
+00102900%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00103000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00103100
+00103200
+00103300%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00103400%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00103500%%%%%%%%                                                        %%%%%%%%
+00103600%%%%%%%%   RECHERCHE DES ITEMS DONT LE NOM CONTIENT UN STRING   %%%%%%%%
+00103700%%%%%%%%                                                        %%%%%%%%
+00103800%%%%%%%%   BBFL; RUN DBA/PO/544("<DATABASE NAME>","<STRING>")   %%%%%%%%
+00103900%%%%%%%%                                                        %%%%%%%%
+00104000%%%%%%%%   LA RECHERCHE EST DE TYPE LITERAL, LE STRING FOURNI   %%%%%%%%
+00104100%%%%%%%%   PEUT COMMENCER PAR UN BLANC (ON CHERCHE  TOUS  LES   %%%%%%%%
+00104200%%%%%%%%   ITEM COMMENCANT PAR CE STRING) OU SE TERMINER  PAR   %%%%%%%%
+00104300%%%%%%%%   UN BLANC (ON CHERCHE TOUS LES ITEMS  SE  TERMINANT   %%%%%%%%
+00104400%%%%%%%%   PAR CE STRING.                                       %%%%%%%%
+00104500%%%%%%%%                                                        %%%%%%%%
+00104600%%%%%%%%                                                        %%%%%%%%
+00104700%%%%%%%%                                                        %%%%%%%%
+00104800%%%%%%%%                                                        %%%%%%%%
+00104900%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00105000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00105100 $ PAGE
+00105200PROCEDURE DBA544(DBA_ARR,NAM_ARR);
+00105300ARRAY         DBA_ARR[*],
+00105400              NAM_ARR[*];
+00105500         BEGIN
+00105600FILE          FDBA(KIND=DISK,MAXRECSIZE=256,BUFFERS=5),
+00105700              FPRT(KIND=PRINTER);
+00105800
+00105900LONG ARRAY    BL0_ARR[0: 0],            % BLOCK ZERO
+00106000              BLB_ARR[0: 0];            % BLOCK DATA BASE
+00106100
+00106200ARRAY         WTT1[0:21],
+00106300              WTT2[0:21],
+00106400              WTT3[0:21];
+00106500
+00106600ARRAY         DIC_ARR[0:2999,0:13];
+00106700
+00106800ARRAY         OUT_ARR[0: 21],           % LIGNE D'IMPRESSION
+00106900              MSG_ARR[0: 19],           % DISPLAY
+00107000              ONE_ARR[0:  0],           % BLOCK FIRST WORD
+00107100              DBA_TIT[0:  9],           % TITLE DESCRIPTION FILE
+00107200              DBA_NAM[0:  2],           % DATABASE NAME
+00107300              OUT_TIT[0:  9],           % TITLE NEW DASDL
+00107400              DIC_TIT[0:  9];           % TITLE DICTIONNARY FILE
+00107500
+00107600TRUTHSET      QUOPNT(48"7F4B"),
+00107700              CHIFFRES("0123456789"),
+00107800              ALPDIG("ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789");
+00107900 $ PAGE
+00108000TRANSLATETABLE
+00108100              LOWUP(EBCDIC                       TO
+00108200                    EBCDIC,
+00108300                    "abcdefghijklmnopqrstuvwxyz" TO
+00108400                    "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+00108500
+00108600POINTER       PA,
+00108700              PB,
+00108800              PC;
+00108900
+00109000LABEL         EXIT;
+00109100
+00109200DEFINE        NODEBLOCK = 47:16 #,      % NODE: NUMERO DE BLOCK
+00109300              NODESTRLS = 31:16 #,      % NODE: INDICE ADDR LIST
+00109400              NODEPROLS = 15:16 #;      % NODE: INDICE ADDR LIST
+00109500
+00109600DEFINE        PT = POINTER #,
+00109700              RP = REPLACE #;
+00109800
+00109900REAL          RA;
+00110000
+00110100BOOLEAN       BA;
+00110200
+00110300INTEGER       S,
+00110400              NA,
+00110500              NB,
+00110600              LNAM,
+00110700              LINES,
+00110800              XXX_FLG,
+00110900              NOF_DIC,
+00111000              RED_ADD,                  % ADRESSE DESCRIPTION FILE
+00111100              RED_REC,                  % NOMBRE RECORDS D'UN BLOCK
+00111200              RED_LEN,                  % LONGUEUR D'UN BLOCK
+00111300              RED_IDX,                  % POSITION D'UN BLOCK
+00111400              RED_KDX,                  % INDICE BOUCLE BLOCK
+00111500              WRD_ADD,                  % INDICE DANS UN BLOCK
+00111600              TXT_BAS,                  % INDICE DEBUT TEXTE DATA BASE
+00111700              NOF_BLK,                  % NOMBRE DE BLOCKS
+00111800              BLB_TXT,                  % BASE TEXT BLOCK
+00111900              BEG_BLK,                  % INDICE DEBUT ADD BLOCK
+00112000              BLK_DBA,                  % NUMERO BLOCK DATA BASE       G
+00112100              LST_DBA,                  % DEBUT LISTE DATA BASE        G
+00112200              PRP_DBA,                  % DEBUT PROPERTIES DATA BASE   G
+00112300              NOF_STR,                  % NOMBRE DE STRUCTURES         G
+00112400              NOF_CHR;                  % NOMBRE DE CARACTERES
+00112500 $ PAGE
+00112600 $ INCLUDE PROPERTIES = "DATABASE/DMS501/PROPERTIES" 20000000-21999999
+00112700 $ PAGE
+00112800%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00112900%%%%%%%%                                                        %%%%%%%%
+00113000%%%%%%%%                   LECTURE D'UN BLOCK                   %%%%%%%%
+00113100%%%%%%%%                                                        %%%%%%%%
+00113200%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00113300
+00113400PROCEDURE READ_BLOCK(GET_ARR,DSK_ADD);
+00113500VALUE         DSK_ADD;
+00113600INTEGER       DSK_ADD;
+00113700ARRAY         GET_ARR[0];
+00113800         BEGIN
+00113900              READ(FDBA[DSK_ADD],1,ONE_ARR);
+00114000
+00114100              RED_REC:=ONE_ARR[DESCBLOCKRECS];
+00114200              RED_LEN:=ONE_ARR[DESCBLOCKRECS] * 256 - 1;
+00114300              RED_IDX:=0;
+00114400
+00114500              RESIZE(GET_ARR,RED_LEN,DISCARD);
+00114600
+00114700              FOR RED_KDX:=1 STEP 1 UNTIL RED_REC DO
+00114800              BEGIN
+00114900                   READ(FDBA[DSK_ADD],256,GET_ARR[RED_IDX]);
+00115000                   RED_IDX:=* + 256;
+00115100                   DSK_ADD:=* + 1;
+00115200              END;
+00115300
+00115400              TXT_BAS:=GET_ARR[TEXTBASELOC];
+00115500         END;
+00115600 $ PAGE
+00115700%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00115800%%%%%%%%                                                        %%%%%%%%
+00115900%%%%%%%%                 ECRITURE D'UN DATA SET                 %%%%%%%%
+00116000%%%%%%%%                                                        %%%%%%%%
+00116100%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00116200
+00116300PROCEDURE WRITE_DATASET(S,F);
+00116400VALUE         S,F;
+00116500INTEGER       S,F;
+00116600         BEGIN
+00116700LONG ARRAY    BLS_ARR[0: 0];            % BLOCK STRUCTURE
+00116800
+00116900ARRAY         STR_NAM[0:  2],           % STRUCTURE NAME
+00117000              ITM_NAM[0:  2];
+00117100
+00117200POINTER       PA,
+00117300              PB,
+00117400              PC;
+00117500
+00117600LABEL         EXIT;
+00117700
+00117800INTEGER       I,
+00117900              L,
+00118000              X,
+00118100              K,
+00118200              N,
+00118300              M,
+00118400              D,
+00118500              QINT;
+00118600
+00118700INTEGER       STR_ADD,                  % DEBUT STRUCTURE DANS BLOCK 0
+00118800              BLK_STR,                  % NUMERO BLOCK STRUCTURE
+00118900              LST_STR,                  % DEBUT LISTE STRUCTURE
+00119000              PRP_STR,                  % DEBUT PROPERTIES STRUCTURE
+00119100              LST_ITM,
+00119200              PRP_ITM,
+00119300
+00119400              STR_NUM,                  % STRUCTURE NUMBER
+00119500              STR_TYP,                  % STRUCTURE TYPE
+00119600              STR_SBT,                  % STRUCTURE SUBTYPE
+00119700
+00119800              INT_ADD,
+00119900              INT_SIZ,
+00120000
+00120100              ITM_NOD,                  % INDICE ADD TETE LISTE ITEMS
+00120200              ITM_ADD,                  % INDICE ADD TETE POPPS ITEMS
+00120300              ITM_PTR,                  % INDICE ADD DANS LISTE ITEMS
+00120400              ITM_TYP,                  % TYPE ITEM
+00120500              ITM_CHR,                  % NBR CARACTERES ITEM
+00120600              ITM_SIZ,                  % LONGUEUR ITEM
+00120700              ITM_SIG,                  % ITEM SIGNE
+00120800              ITM_DEC,                  % NOMBRE DE DECIMALES ITEM
+00120900              ITM_INT,
+00121000              NOF_ITM;                  % NOMBRE D'ITEMS
+00121100 $ PAGE
+00121200PROCEDURE WRITE_ITEM;
+00121300         BEGIN
+00121400LABEL         LOOP_ITEM,
+00121500              EXIT;
+00121600
+00121700              ITM_NOD:=BLS_ARR[PRP_STR + DATAITEMNODE];
+00121800              LST_ITM:=BLS_ARR[ITM_NOD].[NODESTRLS];
+00121900              NOF_ITM:=BLS_ARR[LST_ITM];
+00122000
+00122100              I:=0;
+00122200
+00122300LOOP_ITEM:    IF I:=* + 1 GTR NOF_ITM THEN GO EXIT;
+00122400
+00122500              ITM_ADD:=LST_ITM + I;
+00122600              ITM_ADD:=BLS_ARR[ITM_ADD].[NODEPROLS];
+00122700
+00122800              IF BLS_ARR[ITM_ADD + DUPNAMEB] GTR 0 THEN GO LOOP_ITEM;
+00122900
+00123000              IF BLS_ARR[ITM_ADD + TYPEF] EQL 2 THEN
+00123100              BEGIN
+00123200                   IF STR_SBT NEQ 4 THEN
+00123300                      WRITE_DATASET(BLS_ARR[ITM_ADD + STRUCTNUM],2);
+00123400                   GO LOOP_ITEM;
+00123500              END;
+00123600
+00123700              ITM_CHR:=BLS_ARR[ITM_ADD + IDENTIFIERSZ];
+00123800
+00123900              RP PT(OUT_ARR) + 18 BY
+00124000                 PT(BLS_ARR[ITM_ADD + 2]) + 1 FOR ITM_CHR;
+00124100
+00124200              RA:=REAL(PT(NAM_ARR),1);
+00124300              PA:=PT(OUT_ARR) + 17;
+00124400              NA:=20 - LNAM;
+00124500              BA:=FALSE;
+00124600
+00124700              WHILE NA GTR 0 DO
+00124800              BEGIN
+00124900                   SCAN PA:PA FOR NA:NA UNTIL = RA;
+00125000                   IF PA EQL PT(NAM_ARR) FOR LNAM THEN
+00125100                   BEGIN
+00125200                        BA:=TRUE;
+00125300                        NA:=0;
+00125400                   END;
+00125500                   IF NA GTR 0 THEN
+00125600                   BEGIN
+00125700                        PA:=PA + 1;
+00125800                        NA:=NA - 1;
+00125900                   END;
+00126000              END;
+00126100
+00126200              IF BA THEN ELSE
+00126300              BEGIN
+00126400                   RP PT(OUT_ARR) + 18 BY " " FOR 18;
+00126500                   GO LOOP_ITEM;
+00126600              END;
+00126700
+00126800              IF BLS_ARR[ITM_ADD + INITIALDEFAULTF] EQL 1
+00126900                 THEN ITM_INT:=0
+00127000                 ELSE BEGIN
+00127100                           ITM_INT:=BLS_ARR[ITM_ADD + INITIALTYPE ];
+00127200                           INT_ADD:=BLS_ARR[ITM_ADD + INITIALITLOC];
+00127300                           INT_SIZ:=BLS_ARR[ITM_ADD + INITIALITSZ ]
+00127400                      END;
+00127500
+00127600              ITM_TYP:=BLS_ARR[ITM_ADD + TYPEF              ];
+00127700              ITM_SIG:=BLS_ARR[ITM_ADD + SIGNF              ];
+00127800
+00127900              IF ITM_TYP = ALPH OR
+00128000                 ITM_TYP = FILLR THEN
+00128100              BEGIN
+00128200                   ITM_SIZ:=BLS_ARR[ITM_ADD + TOTALSZ] / 2;
+00128300                   ITM_DEC:=0;
+00128400              END ELSE
+00128500              BEGIN
+00128600                   ITM_SIZ:=BLS_ARR[ITM_ADD + DECLAREDLENGTH];
+00128700                   ITM_DEC:=BLS_ARR[ITM_ADD + SCALEFACTOR   ];
+00128800              END;
+00128900
+00129000              IF BLS_ARR[ITM_ADD + OLDITEMFOUND] > 0 THEN
+00129100              BEGIN
+00129200                   PA:=PT(OUT_ARR) + 36;
+00129300                   WRD_ADD:=BLS_ARR[TEXTBASELOC] +
+00129400                            BLS_ARR[ITM_ADD + OLDITEMFOUND];
+00129500                   IF NA:=BLS_ARR[WRD_ADD].[47:8] > 28 THEN NA:=28;
+00129600                   RP PA BY PT(BLS_ARR[WRD_ADD])+1 FOR NA;
+00129700              END;
+00129800
+00129900              PA:=PT(OUT_ARR) + 66;
+00130000
+00130100              CASE ITM_TYP OF
+00130200              BEGIN
+00130300                GRP  :IF ITM_SIG EQL 1
+00130400                         THEN RP PA BY "FIELD      "
+00130500                         ELSE RP PA BY "GROUP      ";
+00130600                TYP  :RP PA BY "RECORD TYPE(",ITM_SIZ FOR 3 DIGITS,")";
+00130700                POPN :RP PA BY "POPULATION(",ITM_SIZ FOR 4 DIGITS,")";
+00130800                LNK  :RP PA BY "LINK      ";
+00130900                CNT  :RP PA BY "COUNT    (",   ITM_SIZ FOR 4 DIGITS,")";
+00131000                BOLN :RP PA:PA BY "BOOLEAN  ";
+00131100                FLD  :RP PA BY "FIELD    (",   ITM_SIZ FOR 4 DIGITS,")";
+00131200                ALPH: RP PA BY "ALPHA    (",   ITM_SIZ FOR 4 DIGITS,")";
+00131300                FILLR:RP PA BY "SIZE     (",   ITM_SIZ FOR 4 DIGITS,")";
+00131400                DECI :
+00131500                DECF :IF ITM_SIG > 0 OR ITM_DEC > 0 THEN
+00131600                      BEGIN
+00131700                           RP PA:PA BY "NUMBER (";
+00131800                           IF ITM_SIG > 0 THEN RP PA:PA BY "S";
+00131900                           IF ITM_SIZ > 0 THEN RP PA:PA BY
+00132000                                               ITM_SIZ FOR * DIGITS;
+00132100                           IF ITM_DEC > 0 THEN RP PA:PA BY
+00132200                                           ",",ITM_DEC FOR * DIGITS;
+00132300                           RP PA BY ")";
+00132400                      END ELSE
+00132500                         RP PA BY "NUMBER   (",ITM_SIZ FOR 4 DIGITS,")";
+00132600                BINI:
+00132700                BINF :IF ITM_SIG > 0 OR ITM_DEC > 0 THEN
+00132800                      BEGIN
+00132900                           RP PA:PA BY "REAL   (";
+00133000                           IF ITM_SIG > 0 THEN RP PA:PA BY "S";
+00133100                           IF ITM_SIZ > 0 THEN RP PA:PA BY
+00133200                                               ITM_SIZ FOR * DIGITS;
+00133300                           IF ITM_DEC > 0 THEN RP PA:PA BY
+00133400                                           ",",ITM_DEC FOR * DIGITS;
+00133500                           RP PA BY ")";
+00133600                      END ELSE
+00133700                         RP PA BY "REAL     (",ITM_SIZ FOR 4 DIGITS,")";
+00133800                BFLT: RP PA BY "REAL       ";
+00133900                ELSE:GO LOOP_ITEM;
+00134000              END;
+00134100
+00134200              IF ITM_INT GTR 0 THEN
+00134300              BEGIN
+00134400                   PA:=PT(OUT_ARR) + 88;
+00134500                   CASE ITM_INT OF
+00134600                   BEGIN
+00134700                        1: RP PA BY "LOW-VALUE ";
+00134800                        2: RP PA BY "HIGH-VALUE";
+00134900                        3: RP PA BY """,
+00135000                                    PT(BLS_ARR[INT_ADD])FOR INT_SIZ,""";
+00135100                        4: RP PA BY PT(BLS_ARR[INT_ADD])FOR INT_SIZ;
+00135200                     ELSE: RP PA BY "BLANKS    ";
+00135300                   END;
+00135400              END;
+00135500
+00135600              IF LINES GTR 49 THEN
+00135700              BEGIN
+00135800                   WRITE(FPRT[SKIP 1]);
+00135900                   WRITE(FPRT,22,WTT1);
+00136000                   WRITE(FPRT);
+00136100                   WRITE(FPRT,22,WTT2);
+00136200                   WRITE(FPRT,22,WTT3);
+00136300                   LINES:=0;
+00136400              END;
+00136500
+00136600              WRITE(FPRT,22,OUT_ARR);
+00136700              LINES:=* + 1;
+00136800
+00136900              RP PT(OUT_ARR) BY " " FOR 132;
+00137000              QINT:=* + 1;
+00137100              GO LOOP_ITEM;
+00137200
+00137300EXIT:         IF QINT GTR 0 THEN
+00137400              BEGIN
+00137500                   WRITE(FPRT);
+00137600                   LINES:=* + 1;
+00137700                   QINT :=0;
+00137800              END;
+00137900         END;
+00138000 $ PAGE
+00138100%----------------------------------------------------------------------%
+00138200%                        MAIN OF WRITE_DATASET                         %
+00138300%----------------------------------------------------------------------%
+00138400
+00138500              STR_ADD:=LST_DBA + S;
+00138600              BLK_STR:=BLB_ARR[STR_ADD].[NODEBLOCK];
+00138700              LST_STR:=BLB_ARR[STR_ADD].[NODESTRLS];
+00138800              PRP_STR:=BLB_ARR[STR_ADD].[NODEPROLS];
+00138900
+00139000              WRD_ADD:=BEG_BLK + BLK_STR;
+00139100              RED_ADD:=BL0_ARR[WRD_ADD];
+00139200              READ_BLOCK(BLS_ARR,RED_ADD);
+00139300
+00139400              IF F EQL 1 THEN
+00139500                 IF BLS_ARR[PRP_STR + LEVELF ] GTR 1 THEN GO EXIT;
+00139600
+00139700              IF BLS_ARR[PRP_STR + LEVELF ] EQL 0 THEN GO EXIT;
+00139800              IF BLS_ARR[PRP_STR + DELETED] EQL 1 THEN GO EXIT;
+00139900              IF BLS_ARR[PRP_STR + TYPEF  ] NEQ 2 THEN GO EXIT;
+00140000
+00140100              STR_SBT:=BLS_ARR[PRP_STR + SUBTYPEF    ];
+00140200
+00140300              RP PT(OUT_ARR) BY " " FOR 132;
+00140400
+00140500              NOF_CHR:=BLS_ARR[PRP_STR + IDENTIFIERSZ];
+00140600              PA     :=PT(BLS_ARR[PRP_STR + WORDONE]) + 1;
+00140700              PB     :=PT(OUT_ARR);
+00140800
+00140900              RP PB BY PA FOR NOF_CHR;
+00141000
+00141100              WRITE_ITEM;
+00141200
+00141300EXIT:
+00141400         END;
+00141500 $ PAGE
+00141600%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00141700%%%%%%%%                                                        %%%%%%%%
+00141800%%%%%%%%                   DEBUT DU PROGRAMME                   %%%%%%%%
+00141900%%%%%%%%                                                        %%%%%%%%
+00142000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+00142100
+00142200              RP PT(DBA_TIT) BY " " FOR 60;
+00142300              RP PT(DBA_NAM) BY " " FOR 18;
+00142400
+00142500              PA:=PT(DBA_ARR);
+00142600              SCAN PA:PA UNTIL = 48"00";
+00142700
+00142800              IF NA:=OFFSET(PA) = 0 THEN
+00142900              BEGIN
+00143000                   DISPLAY("EMPTY PARAMETER");
+00143100                   MYSELF.STATUS:=-1;
+00143200              END;
+00143300
+00143400              RP PT(DBA_ARR) BY PT(DBA_ARR) FOR NA WITH LOWUP;
+00143500
+00143600              PA:=PT(DBA_ARR);
+00143700              PB:=PT(DBA_TIT);
+00143800              SCAN PA:PA FOR NA:NA WHILE = " ";
+00143900
+00144000              IF NA EQL 0 THEN
+00144100              BEGIN
+00144200                   DISPLAY("EMPTY PARAMETER");
+00144300                   MYSELF.STATUS:=-1;
+00144400              END;
+00144500
+00144600              IF PA = "(" THEN
+00144700              BEGIN
+00144800                   RP PB:PB BY PA:PA FOR NA:NA UNTIL = ")",
+00144900                                    ")DESCRIPTION/";
+00145000                   PA:=PA + 1;
+00145100                   NA:=NA - 1;
+00145200              END ELSE
+00145300              IF PA = "*" THEN
+00145400              BEGIN
+00145500                   RP PB:PB BY "*DESCRIPTION/";
+00145600                   PA:=PA + 1;
+00145700                   NA:=NA - 1;
+00145800              END ELSE
+00145900              BEGIN
+00146000                   RP PB:PB BY "DESCRIPTION/";
+00146100              END;
+00146200 $ PAGE
+00146300              SCAN PA:PA FOR NA:NA WHILE = " ";
+00146400
+00146500              IF NA = 0 THEN
+00146600              BEGIN
+00146700                   DISPLAY("INVALID PARAMETER");
+00146800                   MYSELF.STATUS:=-1;
+00146900              END;
+00147000
+00147100              RP PT(DBA_NAM) BY PA    FOR NA    WHILE IN ALPDIG;
+00147200              RP PB:PB       BY PA:PA FOR NA:NA WHILE IN ALPDIG;
+00147300
+00147400              SCAN PA:PA FOR NA:NA WHILE = " ";
+00147500
+00147600              IF NA > 2 THEN IF PA = "ON " THEN
+00147700              BEGIN
+00147800                   PA:=PA + 3;
+00147900                   NA:=NA - 3;
+00148000                   RP PB:PB BY " ON";
+00148100                   SCAN PA:PA FOR NA:NA WHILE = " ";
+00148200                   RP PB:PB BY " ",PA:PA FOR NA:NA WHILE IN ALPDIG;
+00148300              END;
+00148400
+00148500              RP PB:PB BY ".";
+00148600
+00148700              RP FDBA.TITLE BY PT(DBA_TIT);
+00148800
+00148900              IF NOT FDBA.RESIDENT THEN
+00149000              BEGIN
+00149100                   RP PT(MSG_ARR) BY PT(DBA_TIT) UNTIL =".",48"00";
+00149200                   DISPLAY(PT(MSG_ARR));
+00149300                   DISPLAY("NO DESCRIPTION FILE");
+00149400                   MYSELF.STATUS:=-1;
+00149500              END;
+00149600
+00149700              FDBA.OPEN:=TRUE;
+00149800
+00149900              IF FDBA.FILEKIND NEQ VALUE(DASDLDATA) THEN
+00150000              BEGIN
+00150100                   DISPLAY("INVALID DESCRIPTIONFILE");
+00150200                   MYSELF.STATUS:=-1;
+00150300              END;
+00150400
+00150500              DISPLAY(PT(DBA_NAM));
+00150600
+00150700              PA:=PT(NAM_ARR);
+00150800              SCAN PA:PA UNTIL = 48"00";
+00150900
+00151000              LNAM:=OFFSET(PA);
+00151100
+00151200              IF LNAM EQL 0 OR LNAM GTR 17 THEN
+00151300              BEGIN
+00151400                   DISPLAY("INVALID TEXT");
+00151500                   MYSELF.STATUS:=-1;
+00151600              END;
+00151700
+00151800              PA:=PT(DBA_NAM);
+00151900
+00152000              READ_BLOCK(BL0_ARR,0);
+00152100
+00152200              BEG_BLK:=BL0_ARR[BLOCKDIRADDR];
+00152300              NOF_BLK:=BL0_ARR[BLOCKDIRSZ] - 2;
+00152400
+00152500              BLK_DBA:=BL0_ARR[DBNODELOC].[NODEBLOCK];
+00152600              LST_DBA:=BL0_ARR[DBNODELOC].[NODESTRLS];
+00152700              PRP_DBA:=BL0_ARR[DBNODELOC].[NODEPROLS];
+00152800
+00152900              WRD_ADD:=BEG_BLK + 1;
+00153000              RED_ADD:=BL0_ARR[WRD_ADD].[NODEPROLS];
+00153100              READ_BLOCK(BLB_ARR,RED_ADD);
+00153200
+00153300              BLB_TXT:=BLB_ARR[TEXTBASELOC];
+00153400
+00153500              NOF_STR:=BLB_ARR[LST_DBA];
+00153600
+00153700              RP PT(WTT1) BY "DATA BASE: ",
+00153800                             PT(DBA_NAM) FOR 18,
+00153900                             " "         FOR 66,
+00154000                             "DBA544",
+00154100                             " "         FOR 31;
+00154200
+00154300              RP PT(WTT2) BY "     DATASET          ",
+00154400                             "  ITEM                ",
+00154500                             " DESCRIPTION          ",
+00154600                             "        TYPE          ",
+00154700                             "INITIAL VALUE         ",
+00154800                             "                      ";
+00154900
+00155000              RP PT(WTT3) BY "----------------- ----",
+00155100                             "------------- --------",
+00155200                             "--------------------- ",
+00155300                             "--------------------- ",
+00155400                             "-------------         ",
+00155500                             "                      ";
+00155600
+00155700              LINES:=99;
+00155800
+00155900              FOR S:=1 STEP 1 UNTIL NOF_STR DO WRITE_DATASET(S,1);
+00156000
+00156100EXIT:    END.

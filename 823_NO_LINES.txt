@@ -1,0 +1,1056 @@
+% VERSION  7.1   ; SAVED 20171006 13:16:08                    |LSC      
+%                                                                       
+%                     DCCCXXIII                                         
+%                       _____                                           
+%                      / \   \                                          
+%                     /   \   \                                         
+%                    /     \   \                                        
+%                   /  / \  \   \                                       
+%                  /  /  /\  \   \                                      
+%                 /  /  /  \  \   \                                     
+%                /  /  /    \  \   \                                    
+%               /  /  /      \  \   \                                   
+%              /  /  /___________\   \                                  
+%             /  /  /_________________\                                 
+%             \ /                     /                                 
+%              \_____________________/                                  
+%                                                                       
+%                                                                       
+%----------------------------------------------------------------------%
+% Ce programme lance l'execution de "GC online" sur les "sets" d'une   %
+% base donn?i?es qui sont pass?i?s en parametre.                    
+% Exemple :                                                            %
+% RUN DBA/PO/823 ("DB=(BDA)BDBA ON BBLSYS S=SDESLNK, SDESATT")         %
+% Param?h?tres :                                                      
+% DB = <usercode> DBNAME <localization of the control file>            %
+% S = SETNAME1, SETNAME2, SETNAME3, ...                                %
+% Les codes de contr?t?le "DB" "=" "S" "," sont OBLIGATOIRES.         
+% Par d?i?faut le LOADFACTOR est de 90. Cette valeur peut-?j?tre mod
+% en ex?i?cutant le programme avec une TASKVALUE plus grande que 60.  
+%                                                                       
+% FIXED BUFFER OVERRUN BUG                                              
+%                                                                       
+% 20190305 LA : Program structure changed to allow max than 10 str      
+%                 per execution                                         
+%               Change the open database mode to UPDATE                 
+%               Control the execution of GC to execute an AUDIT CLOSE to
+%                    force 2 CP's                                       
+%               Handling execution errors, taskvalue with error code and
+%                 taskstring with text are returned to caller           
+%                   Errors codes                                        
+%                       1  Parameter Error                              
+%                       2  Error on GC start                            
+%                       3  GC is already running for str <str name>     
+%                       4  ExceptionHandler                             
+%                       5  Invalid Structures                           
+%                       8  Same Str informed more than once             
+%                       9  Other Exceptions                             
+%                                                                       
+%----------------------------------------------------------------------%
+$$   SET LEVEL 2                                                        
+$$   SET LIST                                                           
+$SET TADS                                                               
+%----------------------------------------------------------------------%
+PROCEDURE DB_OPENING(PPARAM);                                           
+ARRAY                PPARAM[*];                                         
+                                                                        
+ BEGIN                                                                  
+  EBCDIC ARRAY                                                          
+     DBNAME [0:99]                                                      
+    ;                                                                   
+  ARRAY                                                                 
+     A                                                                  
+    ,ADMINQ26    [0:799]                                                
+    ,ADMI        [0:2]                                                  
+    ,AMSG         [0:100]                                               
+    ,GCSTRUCTURE [0:100,0:3]   %array to store each structure defined   
+    ;                                                                   
+  POINTER                                                               
+     PTA                                                                
+    ,PTADMI                                                             
+    ,PAMSG                                                              
+    ;                                                                   
+  INTEGER                                                               
+     LNA                                                                
+    ,LNA26                                                              
+    ,VERIFY_TWO_CONTROL_POINTS_MESSAGE                                  
+    ,NBR_STRS         %nbr of structures to process                     
+    ,ISTRUCTURE                                                         
+    ,IHI                                                                
+    ,MAX_NBR_STRS                                                       
+    ;                                                                   
+                                                                        
+  BOOLEAN                                                               
+     PRIVUSER        % true if usercode running programme is priviledged
+    ,FIRSTGC                                                            
+    ,BOOLEANHI                                                          
+    ;                                                                   
+  LIBRARY                                                               
+     DMSUPPORT                                                          
+    ;                                                                   
+  STRING                                                                
+     DB_USERCODE                                                        
+    ,DB_NAME                                                            
+    ,DB_FAMILY                                                          
+    ,DB_PREFIX                                                          
+    ,DMSUPPORT_TITLE                                                    
+    ,DB_TITLE                                                           
+    ,DMI_USER                                                           
+    ,DMI_TITLE                                                          
+    ,DMI_FAMILY                                                         
+    ,GC_COMMAND                                                         
+    ,GC_COMMAND_STATUS                                                  
+    ,LOADF                                                              
+    ;                                                                   
+  REAL                                                                  
+     CF_AFNLOC                                                          
+    ;                                                                   
+  DEFINE                                                                
+     VALCHRA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"#                  
+    ;                                                                   
+  LABEL                                                                 
+     EOJ                                                                
+    ;                                                                   
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+$$ INCLUDE DMISYM = "DATABASE/DMS591/DMINTERPRETER" 20100000-20199999   
+                                                                        
+BOOLEAN                                                                 
+  RSLT;                                                                 
+                                                                        
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+EPILOG PROCEDURE ENDOFROUTINE;                                          
+BEGIN                                                                   
+    ARRAY MSG[0:9];                                                     
+    IF NOT (MYSELF.HISTORYCAUSE EQL 2 AND                               
+       MYSELF.HISTORYTYPE EQL 4) AND                                    
+       MYSELF.HISTORYCAUSE > 0 THEN                                     
+    BEGIN                                                               
+       MYSELF.TASKVALUE:=9;                                             
+       REPLACE POINTER(MSG) BY                                          
+           "HISTORYCAUSE=", STRING(MYSELF.HISTORYTYPE,*);               
+       REPLACE MYSELF.TASKSTRING BY POINTER(MSG);                       
+    END;                                                                
+END;                                                                    
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+                                                                        
+PROCEDURE SCANTITLE(SX,SY);                                             
+VALUE  SX;                                                              
+STRING SX, SY;                                                          
+                                                                        
+BEGIN                                                                   
+                                                                        
+  DEFINE VALCHR  = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890/"#;            
+  LABEL  EXIT;                                                          
+                                                                        
+  SX := TAIL(SX," ");                                                   
+  IF LENGTH(SX) < 1 THEN                                                
+    BEGIN                                                               
+      SY := "DISK";                                                     
+      GO EXIT;                                                          
+    END;                                                                
+  SY := HEAD(SX,NOT " ");                                               
+  IF LENGTH(SX) = LENGTH(SY) THEN                                       
+    BEGIN                                                               
+      SY := "DISK";                                                     
+      GO EXIT;                                                          
+    END;                                                                
+  SX := TAIL(DROP(SX,LENGTH(SY))," ");                                  
+  IF LENGTH(HEAD(SX,VALCHR)) = 2 THEN                                   
+    IF TAKE(HEAD(SX,VALCHR),2) = "ON" THEN                              
+        SY  := HEAD(TAIL(DROP(SX,2)," "),VALCHR);                       
+                                                                        
+EXIT :                                                                  
+                                                                        
+END OF SCANTITLE;                                                       
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+PROCEDURE EXCEPTIONHANDLER;                                             
+BEGIN                                                                   
+  STRING                                                                
+    EXCEPTIONMSG;                                                       
+  BOOLEAN                                                               
+    STATUSRSLT;                                                         
+  ARRAY MSG[0:100];                                                     
+                                                                        
+                                                                        
+    STATUSRSLT := DBSTATUS;                                             
+    DBEXCEPTIONNAME(STATUSRSLT, EXCEPTIONMSG);                          
+    DISPLAY("EXCEPTION-NAME = " !! EXCEPTIONMSG);                       
+    DBEXCEPTIONTEXT(STATUSRSLT, EXCEPTIONMSG);                          
+    DISPLAY("EXCEPTION-TEXT = ");                                       
+    DISPLAY(EXCEPTIONMSG);                                              
+                                                                        
+    MYSELF.TASKVALUE:=4;                                                
+    REPLACE POINTER(MSG) BY  EXCEPTIONMSG, 48"00";                      
+    REPLACE MYSELF.TASKSTRING BY                                        
+                POINTER(MSG);                                           
+    MYSELF.STATUS:=-1;                                                  
+                                                                        
+END OF EXCEPTIONHANDLER;                                                
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+PROCEDURE MONITOR_SUPPORT (MONITOR, DBTITLE);                           
+  STRING                            DBTITLE ;                           
+  PROCEDURE                MONITOR                                      
+           (DBOPTIONSWORD, MAXSTRUCTURENUMBER, DMINQ);                  
+    VALUE   DBOPTIONSWORD, MAXSTRUCTURENUMBER;                          
+    BOOLEAN DBOPTIONSWORD;                                              
+    REAL                   MAXSTRUCTURENUMBER;                          
+    BOOLEAN PROCEDURE DMINQ (A);                                        
+      ARRAY                  A [0];                                     
+      FORMAL;                                                           
+  FORMAL;                                                               
+  LIBRARY DMSUPPORT;                                                    
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+BOOLEAN PROCEDURE GET_DMSUPPORT_TITLE (A_PARAM, DMSUPPORT_TITLE);       
+ARRAY A_PARAM [0];                                                      
+STRING DMSUPPORT_TITLE;                                                 
+                                                                        
+BEGIN                                                                   
+                                                                        
+$$ INCLUDE DMCONTROL = "DATABASE/DMS591/DMCONTROL" 10000000-14999999    
+                                                                        
+ARRAY                                                                   
+   CFA [0:CFPHYSICALSIZE-1],                                            
+   CFTITLE [0:99];                                                      
+                                                                        
+FILE                                                                    
+   CF (KIND=DISK, FILETYPE=7);                                          
+                                                                        
+INTEGER NRCHAR;                                                         
+                                                                        
+REAL                                                                    
+   CFTEXTENT,                                                           
+   CFDIRDESC;                                                           
+                                                                        
+   EBCDIC ARRAY                                                         
+      E_PARAM [0] = A_PARAM;                                            
+   TRANSLATETABLE UPPERCASE                                             
+      (EBCDIC TO EBCDIC,                                                
+       "abcdefghijklmnopqrstuvwxyz" TO "ABCDEFGHIJKLMNOPQRSTUVWXYZ");   
+   %                                                                    
+   %- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -%
+   %                                                                    
+   BOOLEAN PROCEDURE PARSE_DBCLAUSE;                                    
+                                                                        
+   BEGIN                                                                
+      STRING                                                            
+         S,                                                             
+         S1,                                                            
+         ID;                                                            
+                                                                        
+      BOOLEAN                                                           
+         QUOTED;                                                        
+                                                                        
+      LABEL                                                             
+         EXIT;                                                          
+                                                                        
+      OUTPUTMESSAGE ARRAY IN_ERROR (                                    
+      ENGLISH (                                                         
+        1 = "'DB' EXPECTED SCANNING: ",                                 
+        2 = "'=' EXPECTED SCANNING: ",                                  
+        3 = "')' EXPECTED SCANNING: ",                                  
+        4 = "INVALID IDENTIFIER SCANNING: ",                            
+        5 = "'S' EXPECTED SCANNING: ",                                  
+        6 = "MISSING STRUCTURE NAME",                                   
+        7 = "MISSING , :" ,                                             
+        8 = "MAXIMUN NUMBER OF STRUCTURES WAS EXCEEDED(10)"  )          
+        );                                                              
+      %                                                                 
+      %- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+      %                                                                 
+      PROCEDURE ERR (N);                                                
+      VALUE N; REAL N;                                                  
+                                                                        
+      BEGIN                                                             
+         EBCDIC ARRAY                                                   
+            A [0:LENGTH (S) + 50];                                      
+                                                                        
+         REAL                                                           
+            LEN;                                                        
+                                                                        
+         MESSAGESEARCHER (IN_ERROR [N], A, LEN);                        
+         REPLACE A [LEN] BY S,48"00";                                   
+         %DISPLAY (A);                                                  
+         PARSE_DBCLAUSE := TRUE;                                        
+         MYSELF.TASKVALUE:=1;                                           
+         REPLACE MYSELF.TASKSTRING BY A;                                
+                                                                        
+      END;                                                              
+      %                                                                 
+      %- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+      %                                                                 
+      BOOLEAN PROCEDURE GETID;                                          
+                                                                        
+      BEGIN                                                             
+         QUOTED := FALSE;                                               
+         IF TAKE (S, 1) = """ THEN                                      
+           BEGIN                                                        
+             QUOTED := TRUE;                                            
+             S := DROP (S, 1);                                          
+             ID := HEAD (S, NOT """);                                   
+           END                                                          
+           ELSE                                                         
+             ID := HEAD (S, "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-");   
+             IF LENGTH (ID) = 0 OR LENGTH (ID) > 17 THEN                
+               BEGIN                                                    
+                 ERR (4);                                               
+                 GETID := TRUE;                                         
+               END;                                                     
+      END;                                                              
+                                                                        
+      SCAN POINTER(A_PARAM) FOR NRCHAR:200 UNTIL EQL 48"00";            
+      NRCHAR:=200-NRCHAR;                                               
+                                                                        
+      S := STRING (A_PARAM, NRCHAR);                                    
+      S := TRANSLATE(S, UPPERCASE);                                     
+                                                                        
+      S := TAIL (S, " ");                                               
+      IF TAKE (S, 2) NEQ "DB" THEN                                      
+        BEGIN                                                           
+          ERR (1);                                                      
+          GO EXIT;                                                      
+        END;                                                            
+      S := DROP (S, 2);                                                 
+                                                                        
+      S := TAIL (S, " ");                                               
+      IF TAKE (S, 1) NEQ "=" THEN                                       
+        BEGIN                                                           
+          ERR (2);                                                      
+          GO EXIT;                                                      
+        END;                                                            
+      S := DROP (S, 1);                                                 
+                                                                        
+      S := TAIL (S, " ");                                               
+      IF TAKE (S, 1) = "*" THEN                                         
+        BEGIN                                                           
+          S := DROP (S, 1);                                             
+          S := TAIL (S, " ");                                           
+          DB_USERCODE := "*";                                           
+        END                                                             
+        ELSE                                                            
+          IF TAKE (S, 1) = "(" THEN                                     
+            BEGIN                                                       
+              S := DROP (S, 1);                                         
+              S := TAIL (S, " ");                                       
+              IF GETID THEN GO EXIT;                                    
+              IF QUOTED THEN                                            
+                DB_USERCODE := "(" !! """ !! ID !! """ !! ")"           
+                ELSE                                                    
+                DB_USERCODE := "(" !! ID !! ")";                        
+                S := TAIL (S, NOT ")");                                 
+                IF LENGTH (S) > 0 THEN                                  
+                  IF TAKE (S, 1) NEQ ")" THEN                           
+                    BEGIN                                               
+                      ERR (3);                                          
+                      GO EXIT;                                          
+                    END                                                 
+                    ELSE                                                
+                  ELSE                                                  
+                    BEGIN                                               
+                      ERR (3);                                          
+                      GO EXIT;                                          
+                    END;                                                
+                S := DROP (S, 1);                                       
+                S := TAIL (S, " ");                                     
+            END;                                                        
+          IF GETID THEN GO EXIT;                                        
+          IF QUOTED THEN                                                
+              DB_NAME := """ !! ID !! """                               
+            ELSE                                                        
+              DB_NAME := ID;                                            
+          S := TAIL (S, NOT " ");                                       
+          S := TAIL (S, " ");                                           
+          IF LENGTH (S) > 2 THEN                                        
+            IF TAKE (S, 2) = "ON" THEN                                  
+              BEGIN                                                     
+                S := DROP (S, 2);                                       
+                S := TAIL (S, " ");                                     
+                IF GETID THEN GO EXIT;                                  
+                IF QUOTED THEN                                          
+                    DB_FAMILY := """ !! ID !! """                       
+                  ELSE                                                  
+                    DB_FAMILY := ID;                                    
+              END;                                                      
+          IF LENGTH (DB_FAMILY) = 0 THEN                                
+            DB_FAMILY := "DISK";                                        
+          DB_PREFIX := DB_USERCODE !! DB_NAME !! "/";                   
+                                                                        
+          S := DROP( S, LENGTH(ID));                                    
+          S := TAIL (S, " ");                                           
+          IF (LENGTH (S) < 3) OR (TAKE (S, 1) NEQ "S") THEN             
+            BEGIN                                                       
+              ERR(5);                                                   
+              GO EXIT;                                                  
+            END;                                                        
+                                                                        
+          S := DROP (S, 1);                                             
+          S := TAIL (S, " ");                                           
+          IF (LENGTH (S) < 3) OR (TAKE (S, 1) NEQ "=") THEN             
+            BEGIN                                                       
+              ERR(2);                                                   
+              GO EXIT;                                                  
+            END;                                                        
+                                                                        
+          S := DROP (S, 1);                                             
+          S := TAIL (S, " ");                                           
+          IF LENGTH (S) = 0 THEN                                        
+            BEGIN                                                       
+              ERR(6);                                                   
+              GO EXIT;                                                  
+            END;                                                        
+                                                                        
+          GC_COMMAND := "GC ";                                          
+          GC_COMMAND_STATUS := "STATUS GC ";                            
+                                                                        
+          ISTRUCTURE:=0;                                                
+                                                                        
+          WHILE LENGTH (S) > 0 DO                                       
+            BEGIN                                                       
+              IF GETID THEN GO EXIT;                                    
+              IF LENGTH (GC_COMMAND) > 3 THEN                           
+                GC_COMMAND := GC_COMMAND !! ", ";                       
+              GC_COMMAND := GC_COMMAND !! ID !!                         
+                            "(LF=" !! LOADF !! ")";                     
+              IF LENGTH (GC_COMMAND_STATUS) > 10 THEN                   
+                GC_COMMAND_STATUS := GC_COMMAND_STATUS !! ", ";         
+              GC_COMMAND_STATUS := GC_COMMAND_STATUS !! ID;             
+                                                                        
+%load the array with each structure received as parameter               
+              REPLACE POINTER(GCSTRUCTURE[ISTRUCTURE,0]) BY             
+                      ID, 48"00";                                       
+              ISTRUCTURE:=*+1;                                          
+                                                                        
+% CHECK IF "," WAS INFORMED CORRECTLY                                   
+              S := TAIL(S, "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-");    
+                                                                        
+              IF LENGTH (S) > 0 THEN  %%STRING S CONTAINS STRS ALREADY  
+              BEGIN                                                     
+                 IF TAKE(S, 1) EQL " " THEN                             
+                    S := TAIL (S, " ");                                 
+                 IF LENGTH(S) > 0 THEN                                  
+                 BEGIN                                                  
+                    IF TAKE(S, 1) NEQ "," THEN                          
+                    BEGIN                                               
+                       ERR(7);                                          
+                       GO EXIT;                                         
+                    END;                                                
+                    S := TAIL (S, ",");                                 
+                    %IF LENGTH (S) > 0 THEN                             
+                    %  S := DROP (S, 1);                                
+                    S := TAIL (S, " ");                                 
+                 END;                                                   
+              END;                                                      
+                                                                        
+            END;                                                        
+                                                                        
+            NBR_STRS:=ISTRUCTURE;    %nbr of structures to process      
+                                                                        
+            IF NBR_STRS GTR MAX_NBR_STRS THEN                           
+            BEGIN                                                       
+                    ERR(8);                                             
+                    GO EXIT;                                            
+            END;                                                        
+                                                                        
+            DISPLAY("NUMBER OF STRUCTURES FOR THE GC: " !!              
+                    STRING(NBR_STRS,*));                                
+            WHILE ISTRUCTURE>0 DO                                       
+            BEGIN                                                       
+                DISPLAY(POINTER(GCSTRUCTURE[ISTRUCTURE-1,0]));          
+                ISTRUCTURE:=ISTRUCTURE-1                                
+            END;                                                        
+                                                                        
+   EXIT:                                                                
+   END;                                                                 
+                                                                        
+   IF NOT GET_DMSUPPORT_TITLE := PARSE_DBCLAUSE THEN                    
+     BEGIN                                                              
+       REPLACE CFTITLE BY DB_PREFIX, "CONTROL ON ", DB_FAMILY, ".";     
+       REPLACE CF.TITLE BY CFTITLE;                                     
+       READ (CF, CFPHYSICALSIZE, CFA);                                  
+       CF_AFNLOC := CFA [CFAFNLOC];                                     
+       CFDIRDESC := CFA [CFTEXTDIRDESCLOC];                             
+       READ (CF [CFDIRDESC.CFSTARTF], CFPHYSICALSIZE, CFA);             
+       CFTEXTENT :=                                                     
+         CFA [MASKSEARCH (0 & CFDMSUPPORTNAMETEXT CFNUMF,               
+                          0 & REAL (NOT FALSE) CFNUMF,                  
+                          CFA [CFDIRDESC.CFENTRIESF-1])];               
+       READ (CF [CFTEXTENT.CFBAF], CFPHYSICALSIZE, CFA);                
+       DMSUPPORT_TITLE :=                                               
+         STRING (POINTER (CFA [CFTEXTENT.CFWAF+1]),                     
+                 CFA [CFTEXTENT.CFWAF]);                                
+     END;                                                               
+                                                                        
+END GET_DMSUPPORT_TITLE;                                                
+                                                                        
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+  BOOLEAN PROCEDURE CHECK_DUPLICATE_STRCUTURE;                          
+  BEGIN                                                                 
+       INTEGER ISTRUCTURE_COMP;                                         
+       LABEL EXIT_CHECK_DUPLICATE_STRCUTURE;                            
+                                                                        
+       ISTRUCTURE:=0;                                                   
+       WHILE ISTRUCTURE < (NBR_STRS-1) DO                               
+       BEGIN                                                            
+          ISTRUCTURE_COMP:=ISTRUCTURE+1;                                
+          WHILE ISTRUCTURE_COMP < (NBR_STRS) DO                         
+          BEGIN                                                         
+              IF POINTER(GCSTRUCTURE[ISTRUCTURE,0]) EQL                 
+                 POINTER(GCSTRUCTURE[ISTRUCTURE_COMP,0]) FOR 17         
+                     THEN                                               
+              BEGIN                                                     
+                   CHECK_DUPLICATE_STRCUTURE:=TRUE;                     
+                   DISPLAY(POINTER(GCSTRUCTURE[ISTRUCTURE,0]));         
+                   GO EXIT_CHECK_DUPLICATE_STRCUTURE;                   
+              END;                                                      
+              ISTRUCTURE_COMP:=*+1;                                     
+          END;                                                          
+          ISTRUCTURE:=*+1;                                              
+       END;                                                             
+       CHECK_DUPLICATE_STRCUTURE:=FALSE;                                
+                                                                        
+     EXIT_CHECK_DUPLICATE_STRCUTURE:                                    
+  END;                                                                  
+                                                                        
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+  BOOLEAN PROCEDURE CHECKERROR;                                         
+  BEGIN                                                                 
+      INTEGER I;                                                        
+      POINTER P;                                                        
+                                                                        
+      P:=POINTER(ADMINQ26);                                             
+      CHECKERROR:=FALSE;                                                
+      IF POINTER(ADMINQ26) EQL "**ERROR"                                
+           FOR 7 THEN                                                   
+      BEGIN                                                             
+         CHECKERROR:=TRUE;                                              
+         MYSELF.TASKVALUE:=2;                                           
+         REPLACE MYSELF.TASKSTRING BY                                   
+                        P  ;                                            
+      END;                                                              
+                                                                        
+  END;                                                                  
+                                                                        
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+PROCEDURE MONITOR(DBOPTIONSWORD, MAXSTRUCTURENUMBER, DMINQ);            
+  VALUE           DBOPTIONSWORD, MAXSTRUCTURENUMBER        ;            
+  BOOLEAN         DBOPTIONSWORD                            ;            
+  REAL                           MAXSTRUCTURENUMBER        ;            
+  BOOLEAN PROCEDURE                                  DMINQ(A);          
+    ARRAY                                                  A[0]; FORMAL;
+                                                                        
+BEGIN                                                                   
+                                                                        
+    LABEL                                                               
+       EXIT;                                                            
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+   PROCEDURE INITIALIZE;                                                
+                                                                        
+   BEGIN                                                                
+   DEFINE FORCESEGMENT = #;                                             
+   MYSELF.OPTION := 0;                                                  
+   PRIVUSER := BOOLEAN                                                  
+      (USERDATA (2, MYSELF, USERDATALOCATOR ("PU"), 0, 0).[46:1]);      
+%   IF NOT PRIVUSER THEN                                                
+%      MYSELF.STATUS := VALUE(TERME_PARAMTED);                          
+   MYSELF.OPTION := 0                                                   
+      & 1[1:1]                % FAULT                                   
+      & 1[2:1]                % DSED                                    
+%     & 1[7:1]                % BASE                                    
+      & 1[8:1]                % ARRAYS                                  
+%     & 1[9:1]                % CODE                                    
+%     & 1[10:1]               % FILES                                   
+%     & 1[15:1]               % DBS                                     
+      ;                                                                 
+                                                                        
+   END INITIALIZE;                                                      
+                                                                        
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+   BOOLEAN PROCEDURE CHECKWORD(PAR, TEXT);                              
+   ARRAY PAR[*];                                                        
+   STRING TEXT;                                                         
+   BEGIN                                                                
+     POINTER P1;                                                        
+     STRING WORD;                                                       
+     ARRAY A[0:9],                                                      
+           B[0:9],                                                      
+           RES[0:799];                                                  
+     INTEGER I;                                                         
+     LABEL EXIT_CHECKWORD;                                              
+                                                                        
+     REPLACE POINTER(B) BY " " FOR 10 WORDS;                            
+     REPLACE POINTER(B) BY TEXT ;                                       
+                                                                        
+     REPLACE POINTER(RES) BY POINTER(PAR[1]) UNTIL EQL 48"00";          
+     P1:=POINTER(RES);                                                  
+    % DISPLAY(P1);                                                      
+     WHILE P1 NEQ 48"00" DO                                             
+     BEGIN                                                              
+         REPLACE POINTER(A) BY " " FOR 10 WORDS;                        
+         I:=60;                                                         
+         REPLACE POINTER(A)  BY P1:P1 FOR I:I UNTIL EQL " ";            
+         IF POINTER(A) EQL POINTER(B) FOR 60-I THEN                     
+%         SCAN P1:P1 UNTIL EQL " ";                                     
+%         IF P1 ^= "" FOR 10 THEN                                       
+         BEGIN                                                          
+             CHECKWORD:=TRUE;                                           
+             %DISPLAY("TRUE");                                          
+             GO EXIT_CHECKWORD;                                         
+         END;                                                           
+         REPLACE POINTER(A)  BY P1:P1 FOR I:I UNTIL NEQ " ";            
+     END;                                                               
+     CHECKWORD:=FALSE;                                                  
+     %DISPLAY("FALSE");                                                 
+                                                                        
+     EXIT_CHECKWORD:                                                    
+                                                                        
+   END;                                                                 
+                                                                        
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+   PROCEDURE CHECK_STRUCTURES;                                          
+   BEGIN                                                                
+       ARRAY MSG[0:60];                                                 
+       POINTER PMSG;                                                    
+       INTEGER ERRORS;                                                  
+                                                                        
+       ISTRUCTURE:=0;                                                   
+       REPLACE MSG BY 48"00" FOR SIZE(MSG) WORDS;                       
+       PMSG:=POINTER(MSG);                                              
+       REPLACE PMSG:PMSG BY "INVALID STRCUTURE: ";                      
+       WHILE ISTRUCTURE < (NBR_STRS) DO                                 
+       BEGIN                                                            
+                                                                        
+           REPLACE A BY 48"00" FOR SIZE(A) WORDS;                       
+           A[0]:= 26;  % VISIBLE DBS                                    
+           REPLACE A[1] BY "STATUS STRUCTURE ",                         
+                           POINTER(GCSTRUCTURE[ISTRUCTURE,0])           
+              UNTIL EQL 48"00", 48"00";                                 
+           DMINQ(A);                                                    
+           PTA := POINTER(A[1]);                                        
+           %DISPLAY(PTA);                                               
+           IF CHECKWORD(A, "POPULATIONWARN") THEN                       
+           BEGIN                                                        
+              DISPLAY("ERROR, DATASET CAN NOT BE SELECTED: " !!         
+                       STRING(POINTER(GCSTRUCTURE[ISTRUCTURE,0]),17));  
+              REPLACE PMSG:PMSG BY                                      
+                 POINTER(GCSTRUCTURE[ISTRUCTURE,0]) UNTIL EQL 48"00",   
+                                   " DATASET CAN NOT BE SELECTED";      
+              ERRORS:=*+1;                                              
+           END                                                          
+           ELSE IF (CHECKWORD(A, "**ERROR-UNRECOGNIZED")) THEN          
+           BEGIN                                                        
+              DISPLAY("ERROR CHECKING STRUCTURE " !!                    
+                       STRING(POINTER(GCSTRUCTURE[ISTRUCTURE,0]),17));  
+              REPLACE PMSG:PMSG BY  "  ",                               
+                 POINTER(GCSTRUCTURE[ISTRUCTURE,0]) UNTIL EQL 48"00",   
+                 " ",                                                   
+                 PTA UNTIL EQL 48"00";                                  
+              ERRORS:=*+1;                                              
+           END;                                                         
+           ISTRUCTURE:=*+1;                                             
+       END;                                                             
+                                                                        
+       IF ERRORS > 0 THEN                                               
+       BEGIN                                                            
+           REPLACE PMSG:PMSG BY 48"00" FOR 1;                           
+           DISPLAY(POINTER(MSG));                                       
+           MYSELF.TASKVALUE:=5;                                         
+           REPLACE MYSELF.TASKSTRING BY POINTER(MSG);                   
+           MYSELF.STATUS:=-1;                                           
+       END;                                                             
+                                                                        
+   END;                                                                 
+                                                                        
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+   PROCEDURE CHECK_GC_INITIAL_STATUS;                                   
+   BEGIN                                                                
+       ARRAY MSG[0:20];                                                 
+       POINTER PMSG;                                                    
+       INTEGER ERRORS;                                                  
+                                                                        
+       ISTRUCTURE:=0;                                                   
+       REPLACE MSG BY 48"00" FOR SIZE(MSG) WORDS;                       
+       PMSG:=POINTER(MSG);                                              
+       REPLACE PMSG:PMSG BY "GC ALREADY RUNNING FOR ";                  
+       WHILE ISTRUCTURE < (NBR_STRS) DO                                 
+       BEGIN                                                            
+                                                                        
+           REPLACE A BY 48"00" FOR SIZE(A) WORDS;                       
+           A[0]:= 26;  % VISIBLE DBS                                    
+           REPLACE A[1] BY "STATUS GC ",                                
+                           POINTER(GCSTRUCTURE[ISTRUCTURE,0])           
+              UNTIL EQL 48"00", 48"00";                                 
+           %DISPLAY(POINTER(A[1]));                                     
+           DMINQ(A);                                                    
+           PTA := POINTER(A[1]);                                        
+           %DISPLAY(PTA);                                               
+           IF (CHECKWORD(A, "RUNNING") AND                              
+               NOT CHECKWORD(A, "NOT"))  OR                             
+              CHECKWORD(A, "WAITING")  THEN                             
+           BEGIN                                                        
+              DISPLAY("GC IS ALREADY RUNNING FOR " !!                   
+                       STRING(POINTER(GCSTRUCTURE[ISTRUCTURE,0]),17));  
+              REPLACE PMSG:PMSG BY                                      
+                 POINTER(GCSTRUCTURE[ISTRUCTURE,0]) UNTIL EQL 48"00",   
+                                   " ";                                 
+              ERRORS:=*+1;                                              
+           END                                                          
+           ELSE IF (CHECKWORD(A, "**ERROR-UNRECOGNIZED")) THEN          
+           BEGIN                                                        
+              DISPLAY("ERROR CHECKING STRUCTURE NAME " !!               
+                       STRING(POINTER(GCSTRUCTURE[ISTRUCTURE,0]),17));  
+              REPLACE POINTER(MSG) BY                                   
+                 POINTER(GCSTRUCTURE[ISTRUCTURE,0]) UNTIL EQL 48"00",   
+                 PTA UNTIL EQL 48"00";                                  
+              ERRORS:=*+1;                                              
+           END;                                                         
+           ISTRUCTURE:=*+1;                                             
+       END;                                                             
+                                                                        
+       IF ERRORS > 0 THEN                                               
+       BEGIN                                                            
+           MYSELF.TASKVALUE:=3;                                         
+           REPLACE MYSELF.TASKSTRING BY POINTER(MSG);                   
+           MYSELF.STATUS:=-1;                                           
+       END;                                                             
+                                                                        
+   END;                                                                 
+                                                                        
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+                                                                        
+   BOOLEAN PROCEDURE CHECK_WAITING_END_GC;                              
+   BEGIN                                                                
+       INTEGER STRUCTURES_WAITING;                                      
+       ARRAY MSG[0:50]                                                  
+             ,ADMINQ[0:799];                                            
+       POINTER P;                                                       
+       INTEGER I;                                                       
+                                                                        
+       IF BOOLEANHI THEN                                                
+       BEGIN                                                            
+           DISPLAY("GC STATUS");                                        
+           DISPLAY("=========");                                        
+       END;                                                             
+                                                                        
+       CHECK_WAITING_END_GC:=FALSE;                                     
+       ISTRUCTURE:=0;                                                   
+       WHILE ISTRUCTURE < (NBR_STRS) DO                                 
+       BEGIN                                                            
+                                                                        
+           REPLACE A BY 48"00" FOR SIZE(A) WORDS;                       
+           A[0]:= 26;  % VISIBLE DBS                                    
+           REPLACE A[1] BY "STATUS GC ",                                
+                           POINTER(GCSTRUCTURE[ISTRUCTURE,0])           
+              UNTIL EQL 48"00", 48"00";                                 
+           DMINQ(A);                                                    
+           PTA := POINTER(A[1]);                                        
+           %DISPLAY(PTA);                                               
+           IF CHECKWORD(A, "CP'S") OR                                   
+              (CHECKWORD(A, "FIRST") AND CHECKWORD(A, "CP")) OR         
+              (CHECKWORD(A, "NOT") AND CHECKWORD(A, "RUNNING")) THEN    
+           BEGIN                                                        
+              STRUCTURES_WAITING:=*+1;                                  
+           END;                                                         
+                                                                        
+%%% DISPLAY STATUS INFORMATION FOR HI RECEIVED                          
+           IF BOOLEANHI THEN                                            
+           BEGIN                                                        
+              REPLACE ADMINQ BY 48"00" FOR SIZE(ADMINQ) WORDS;          
+              REPLACE POINTER(ADMINQ) BY                                
+                      POINTER(A[1]) UNTIL EQL 48"00";                   
+              P:=POINTER(ADMINQ);                                       
+              WHILE P NEQ 48"00" FOR 1 DO                               
+              BEGIN                                                     
+                 I:=150;                                                
+                 SCAN P FOR I:I UNTIL EQL 48"0D";                       
+                 REPLACE POINTER(MSG) BY " " FOR 300;                   
+                 IF I NEQ 0 THEN                                        
+                    REPLACE POINTER(MSG) BY                             
+                        P:P UNTIL EQL 48"0D", 48"00"                    
+                 ELSE                                                   
+                    REPLACE POINTER(MSG) BY                             
+                        P:P UNTIL EQL 48"00", 48"00";                   
+                 DISPLAY(POINTER(MSG));                                 
+                 IF P EQL 48"0D" THEN                                   
+                    P:=P+1;                                             
+              END;                                                      
+           END;                                                         
+           ISTRUCTURE:=*+1;                                             
+       END;                                                             
+                                                                        
+       IF STRUCTURES_WAITING = NBR_STRS THEN                            
+       BEGIN                                                            
+           DISPLAY("END OF GC FOR ALL THE STRUCTURES");                 
+           CHECK_WAITING_END_GC:=TRUE;                                  
+       END;                                                             
+                                                                        
+   END;                                                                 
+                                                                        
+%                                                                       
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%                                                                       
+%                                                                       
+%                                                                       
+%                                                                       
+%----------------------------------------------------------------------%
+%                                                                       
+%                    ---- MONITOR START ----                            
+%                                                                       
+INITIALIZE;                                                             
+                                                                        
+%                                                                       
+                                                                        
+RSLT := DBOPEN("UPDATE"); %% OPEN UPDATE TO CHECK OFFLINE DUMP          
+                          %% AND TO FORCE TWO CONTROL POINTS ON CLOSE   
+IF RSLT THEN                                                            
+  BEGIN                                                                 
+    EXCEPTIONHANDLER;                                                   
+    GO EXIT;                                                            
+  END;                                                                  
+%                                                                       
+                                                                        
+FIRSTGC := TRUE;                                                        
+                                                                        
+IF CHECK_DUPLICATE_STRCUTURE THEN                                       
+BEGIN                                                                   
+   DISPLAY("INVALID PARAMETER: DUPLICATE STRCUTURES FOUND");            
+   MYSELF.TASKVALUE:=8;                                                 
+   REPLACE MYSELF.TASKSTRING BY                                         
+         "INVALID PARAMETER: DUPLICATE STRCUTURES FOUND";               
+   MYSELF.STATUS:=-1;                                                   
+END;                                                                    
+                                                                        
+CHECK_STRUCTURES;                                                       
+                                                                        
+CHECK_GC_INITIAL_STATUS;                                                
+                                                                        
+%RSLT := DBCLOSE;                                                       
+%IF RSLT THEN                                                           
+%  EXCEPTIONHANDLER;                                                    
+%IF FIRSTGC THEN                                                        
+%    GO EXIT;                                                           
+%                                                                       
+                                                                        
+%REPLACE A BY "      " FOR SIZE(A) WORDS;                               
+%A[0]:= 26;  % Visible DBS                                              
+%REPLACE A[1] BY GC_COMMAND;                                            
+%DMINQ(A);                                                              
+%                                                                       
+%REPLACE ADMINQ26 BY 48"00" FOR SIZE(ADMINQ26) WORDS;                   
+%REPLACE POINTER(ADMINQ26) BY POINTER(A[1]) FOR LNA;                    
+%IF CHECKERROR THEN                                                     
+%BEGIN                                                                  
+%   RSLT := DBCLOSE;                                                    
+%   IF RSLT THEN                                                        
+%      EXCEPTIONHANDLER;                                                
+%   GO EXIT;                                                            
+%END;                                                                   
+                                                                        
+REPLACE POINTER(AMSG) BY 48"00" FOR  100 WORDS;                         
+PAMSG:=POINTER(AMSG);                                                   
+REPLACE PAMSG:PAMSG BY "ERROR ON GC START: ";                           
+FOR ISTRUCTURE:=0 STEP 1 UNTIL NBR_STRS - 1 DO                          
+BEGIN                                                                   
+                                                                        
+  REPLACE A BY "      " FOR SIZE(A) WORDS;                              
+  A[0]:= 26;  % Visible DBS                                             
+  REPLACE A[1] BY "GC ",POINTER(GCSTRUCTURE[ISTRUCTURE,0])              
+             UNTIL EQL 48"00";                                          
+  DMINQ(A);                                                             
+%                                                                       
+  REPLACE ADMINQ26 BY 48"00" FOR SIZE(ADMINQ26) WORDS;                  
+  REPLACE POINTER(ADMINQ26) BY POINTER(A[1]) UNTIL EQL 48"00";          
+ % DISPLAY(POINTER(A[1]));                                              
+  IF CHECKERROR THEN                                                    
+  BEGIN                                                                 
+      REPLACE PAMSG:PAMSG BY                                            
+              POINTER(GCSTRUCTURE[ISTRUCTURE,0]) UNTIL EQL 48"00",      
+              " ";                                                      
+      NBR_STRS:=*-1;                                                    
+  END;                                                                  
+                                                                        
+END;                                                                    
+%                                                                       
+IF  NBR_STRS = 0 THEN                                                   
+BEGIN                                                                   
+     MYSELF.TASKVALUE:=2;                                               
+     REPLACE MYSELF.TASKSTRING BY                                       
+             POINTER(AMSG);                                             
+     DISPLAY("ERROR IN GC START: 0 STRUCTURES LEFT");                   
+     MYSELF.STATUS:=-1;                                                 
+END;                                                                    
+                                                                        
+                                                                        
+REPLACE ADMINQ26 BY 48"00" FOR SIZE(ADMINQ26) WORDS;                    
+REPLACE POINTER(ADMINQ26) BY POINTER(A[1]) FOR LNA;                     
+IF CHECKERROR THEN                                                      
+BEGIN                                                                   
+   RSLT := DBCLOSE;                                                     
+   IF RSLT THEN                                                         
+      EXCEPTIONHANDLER;                                                 
+   GO EXIT;                                                             
+END;                                                                    
+                                                                        
+%                                                                       
+%%%LNA := 11;                                                           
+                                                                        
+%logic to verify if all gc are in WAITING TWO CP status                 
+WHILE NOT CHECK_WAITING_END_GC DO                                       
+BEGIN                                                                   
+    BOOLEANHI:=FALSE;                                                   
+    WAIT((10), MYSELF.EXCEPTIONEVENT);                                  
+    RESET(MYSELF.EXCEPTIONEVENT);                                       
+    IF MYSELF.TASKVALUE > 0 THEN                                        
+    BEGIN                                                               
+       BOOLEANHI:=TRUE;                                                 
+       MYSELF.TASKVALUE:=0;                                             
+    END;                                                                
+END;                                                                    
+                                                                        
+LNA:=0; %to avoid execution of next while-old logic                     
+WHILE LNA > 0 DO                                                        
+BEGIN                                                                   
+                                                                        
+   REPLACE A BY 48"00" FOR SIZE(A) WORDS;                               
+   A[0]:= 26;  % VISIBLE DBS                                            
+   REPLACE A[1] BY GC_COMMAND_STATUS;                                   
+   DMINQ(A);                                                            
+                                                                        
+   PTA := POINTER(A[1]);                                                
+   SCAN PTA:PTA UNTIL = 48"00";                                         
+   LNA := LNA26 := OFFSET(PTA) - 6;                                     
+   REPLACE ADMINQ26 BY 48"00" FOR SIZE(ADMINQ26) WORDS;                 
+   REPLACE POINTER(ADMINQ26) BY POINTER(A[1]) FOR LNA;                  
+                                                                        
+%   IF FIRSTGC THEN                                                     
+%   BEGIN                                                               
+%     DISPLAY(STRING(POINTER(ADMINQ26), LNA));                          
+%     FIRSTGC := FALSE;                                                 
+%   END;                                                                
+                                                                        
+   %DISPLAY("MSG2: " !! STRING(POINTER(ADMINQ26), LNA));                
+                                                                        
+   IF CHECKERROR THEN                                                   
+   BEGIN                                                                
+       RSLT := DBCLOSE;                                                 
+       IF RSLT THEN                                                     
+          EXCEPTIONHANDLER;                                             
+       MYSELF.STATUS:=-1;                                               
+   END;                                                                 
+                                                                        
+   PTA := POINTER(ADMINQ26);                                            
+   WHILE LNA26 > 0 DO                                                   
+   BEGIN                                                                
+      SCAN PTA:PTA FOR LNA26:LNA26 UNTIL = "#"; % #(<taskno>)           
+      IF LNA26 = 0 THEN  % No more tasks in list                        
+         LNA := 0          % force outer loop exit so we go EOJ         
+      ELSE                                                              
+      BEGIN                                                             
+         PTA := * + 2;                                                  
+         LNA26 := * - 2;                                                
+         IF PTA ^= "0" FOR 1 THEN  % Taskno not zero                    
+         BEGIN        %So check if status NOT RUNNING                   
+         % Appears to be a bug in DMINQ doesn't zero taskno sometimes   
+         %  when task finished                                          
+            SCAN PTA:PTA FOR LNA26:LNA26 UNTIL = ",";                   
+            PTA := * + 2;                                               
+            LNA26 := * - 2;                                             
+            SCAN PTA:PTA FOR LNA26:LNA26 UNTIL = " ";                   
+            PTA := * + 1;                                               
+            IF PTA ^= "NOT RUNNING" FOR 11 THEN                         
+               LNA26 := 0; %force loop exit so we stop scanning         
+         END;                                                           
+      END;                                                              
+   END WHILE LNA26 GTR 0;                                               
+   %WAITANDRESET((30), MYSELF.EXCEPTIONEVENT);                          
+   WAIT((30));                                                          
+END WHILE LNA GTR 0;                                                    
+                                                                        
+%%AUDIT CLOSE                                                           
+                                                                        
+REPLACE A BY 48"00" FOR SIZE(A) WORDS;                                  
+A[0]:= 26;  % VISIBLE DBS                                               
+REPLACE A[1] BY "AUDIT CLOSE ", 48"00";                                 
+DMINQ(A);                                                               
+                                                                        
+RSLT := DBCLOSE;     %this close force two cp allowing change the       
+                     %  temporary files to final str files              
+IF RSLT THEN                                                            
+  EXCEPTIONHANDLER;                                                     
+                                                                        
+EXIT :                                                                  
+                                                                        
+END MONITOR;                                                            
+                                                                        
+%%%%%%%%%%%%%%%%%%%%%%%%   OUTER BLOCK  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                                                                        
+%MYSELF.DISPLAYONLYTOMCS := TRUE;                                       
+                                                                        
+MAX_NBR_STRS:=10;                                                       
+                                                                        
+IF (MYSELF.TASKVALUE > 60) AND (MYSELF.TASKVALUE < 100) THEN            
+  LOADF := STRING(MYSELF.TASKVALUE, 2)                                  
+ELSE                                                                    
+  LOADF := "90";                                                        
+                                                                        
+MYSELF.TASKVALUE:=0; %clean taskvalue to be used in errors logic        
+                                                                        
+IF NOT GET_DMSUPPORT_TITLE (PPARAM, DMSUPPORT_TITLE) THEN               
+  BEGIN                                                                 
+    DMSUPPORT.TITLE := DMSUPPORT_TITLE;                                 
+    DB_TITLE := DB_USERCODE !! DB_NAME !! " ON " !! DB_FAMILY;          
+    SCANTITLE(DMSUPPORT_TITLE,DMI_FAMILY);                              
+    DMI_TITLE := "DMINTERPRETER/" !! DB_NAME !! " ON " !! DMI_FAMILY;   
+                                                                        
+    REPLACE POINTER(ADMI) BY MYSELF.TASKSTRING;                         
+    PTADMI := POINTER(ADMI);                                            
+    SCAN PTADMI:PTADMI UNTIL = 48"00";                                  
+    DMI_USER := HEAD(TAIL(STRING(POINTER(ADMI),OFFSET(PTADMI))," "),    
+                VALCHRA);                                               
+    IF DMI_USER = EMPTY THEN                                            
+      DMI_USER := "*"                                                   
+      ELSE                                                              
+      BEGIN                                                             
+        DMI_USER := HEAD(TAIL(DMI_USER," "),VALCHRA);                   
+        DMI_USER := "(" !! DMI_USER !! ")";                             
+      END;                                                              
+    DMI_TITLE := DMI_USER !! DMI_TITLE;                                 
+                                                                        
+    DMI.TITLE := DMI_TITLE;                                             
+    DISPLAY(DMI_TITLE);                                                 
+    MONITOR_SUPPORT (MONITOR, DB_TITLE);                                
+  END                                                                   
+  ELSE                                                                  
+    MYSELF.STATUS:=-1;                                                  
+                                                                        
+EOJ :                                                                   
+%  DISPLAY(STRING(CF_AFNLOC,*));                                        
+                                                                        
+END.                                                                    
+                                                                        

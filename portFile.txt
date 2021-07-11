@@ -1,0 +1,11 @@
+Begin                                                                   
+  File                                                                  
+    PortTest(Kind=Port,                                                 
+             Service=TCPIPNATIVESERVICE,                                
+             MyName="2010.",                                            
+             YourName=".",                                              
+             YourHost=".",                                              
+             AvailableOnly = FALSE                                      
+             );                                                         
+AwaitOpen(PortTest[SubFile 1]);                                         
+End.            

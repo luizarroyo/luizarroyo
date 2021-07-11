@@ -1,0 +1,581 @@
+$SET TADS  LEVEL 2
+
+Procedure Audit_reader1( usr, datadb, apck, auditno, to_share);
+Array  usr, datadb, apck[*];
+Integer auditno;
+Boolean to_share;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% This program needs 4 parameters
+% usr       The usercode of the database including the parenthesis
+%           Example (USERCODE)
+% datadb    The database name
+% apck      The pack the audits are on
+% auditno   The auditfile number to extract
+% to_share  If you want to write the output file to a share
+% You also need a configuration file per database.
+% The name will be CONFIG/<datab> the database name and preferable
+% under the usercode of the database and on the database pack
+% Lines starting with % will be ignored
+% The data set name should start in column 1 followed by one or more
+% spaces followed by the structure number which can be found in the
+% DASDL compile listing
+% The output file(s) are named DBA/<datadb>/AUDIT/<afn>/xx
+% History
+%2018-07-22
+% The original source was delivered by engineering(John Ticehurst).
+%2018-12-06
+% Took out the dependences of the database and via a config file the
+% program can be used for every database
+%2019-01-16 be
+%Make it possible to write to a share on the sql server
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+begin
+
+$include "*DATABASE/DMS591/PROPERTIES" 38100000 - 38576000
+$include "*DATABASE/DMS591/PROPERTIES" 83000000 - 83999999
+$include "*DATABASE/DMS591/PROPERTIES" 20000000 - 24999999
+$include "*DATABASE/DMS591/PROPERTIES" 30000000 - 31999999
+
+LIBRARY auditlib (
+       TITLE="*SYSTEM/DMS591/DMAUDITLIB ON DISK."
+                 )
+       [ARRAY   AUDIT_INFO [0];
+        INTEGER ALF_LINKV,
+                ALB_LINKV,
+                ALB_SIZEV,
+                ALS_LINKV,
+                ALS_SIZEV,
+                ALK_LINKV,
+                ALK_SIZEV;
+        BOOLEAN LOCATEFAST_CAPABLE;
+        ARRAY   AUDIT_BUFFERS [0,0] (READWRITE);
+       ];
+
+
+define
+  cor (a,b)             = (if (a) then true else (b)) #,
+  cand (a,b)            = (if (a) then (b) else false) #,
+  donothing             =  #,
+  space                 = " " #,
+  comma                 = "," #,
+  aeok                  = 0  #,
+  aeendoffilev          = 17 #,
+  aeauditstopperv       = 36 #,
+
+  %  identifier / family / title limits
+  identifier_max_length = 17 #,
+  family_max_length     = 52 #, % disk = <pp> otherwise <sp> 17*2+18
+  filetitle_max_levels  = 14 #,
+  filetitle_max_length := (filetitle_max_levels *
+                          (identifier_max_length + 3) + 2) #,
+
+  au_len = 3000 #,  %max size of audit record (logical)
+  CrLf   = 48"0D25"#;
+
+array
+  rec[0:au_len-1],
+  msg[0:22]
+  ;
+
+ebcdic array
+  intl_conv,
+  conv_ary ,
+  intl_lang[0:29],
+  struct_name[0:4095,0:17]
+  ;
+
+string db_name, us_name, aud_pck, db_pack;
+
+real
+  lb,
+  ub,
+  type,
+  audsnf,
+  audsze,
+  dbAuditno,
+  dbAuditbn,
+  curr_absn;
+
+boolean
+  isaborted;
+library dmsupport;
+
+  real procedure init_properties(str,properties);
+  %            ---------------
+    value str;
+    real str;
+    array properties[0];
+  library dmsupport;
+
+%library auditlib (libaccess= byfunction,
+%                  functionname = "DMSIIAUDITSUPPORT.")
+%       [array   audit_info [0];
+%        integer alf_linkv,
+%                alb_linkv,
+%                alb_sizev,
+%                als_linkv,
+%                als_sizev,
+%                alk_linkv,
+%                alk_sizev;
+%        boolean locatefast_capable;
+%        array   audit_buffers [0,0] (readwrite);
+%       ];
+%
+boolean procedure audit_open
+%                 ----------
+                  (dbname, dbpack, afn, aftyp, dontwait);
+      value dbname, dbpack, afn, aftyp, dontwait;
+      string dbname, dbpack;
+      integer afn, aftyp;
+      boolean dontwait;
+         library auditlib;
+
+boolean procedure audit_close;
+%                 -----------
+         library auditlib;
+boolean procedure audit_next_record
+%                -----------------
+                 (fswok, absn, rtyp, strno, rlen, bufinx, recoff);
+      value   fswok;
+      boolean fswok;
+      integer absn, rtyp, strno, rlen, bufinx, recoff;
+         library auditlib;
+
+  real
+   dm_absn,
+   dm_audit,
+   dm_absnflushed,
+   dm_users,
+   dm_sptabsn,
+   dm_spttimestamp,
+   dm_level,
+   dm_ctrlstate,
+   dm_absncheck,
+   de_sptabsn;
+
+  Integer Afn, param_length;
+
+
+% _____________________________________________________________________
+%
+%                                  Auditor
+% _____________________________________________________________________
+
+
+  Define
+  % Auditor file attributes
+    Auditor_buffer_size      = 102 #   % in chars.
+   ,Auditor_write_max        = 1000000#% max # records per Auditor file
+   ,Auditor_fileName_prefix       = "DBA/" #
+   ,Auditor_fileName_prefix_share = "UNC/DEX/"""Auditing"""/" #
+   ,Auditor_max_data_size    = 540 #
+   ;
+
+  Integer
+    AuditorNo                 % denotes Auditor file name suffix #
+   ,Auditor_write_count       % # of records written
+   ;
+
+  Pointer
+     Auditor_fileName_ptr
+    ,pmsg
+    ;
+
+  Ebcdic Array
+    Auditor_FileName [0:filetitle_max_length-1]
+   ,Auditor_Buff [0:Auditor_buffer_size-1]
+   ;
+
+  File
+    Auditor_File;
+
+% ---------------------------------------------------------------------
+
+  Procedure Initialise_Auditor_File;
+% -------------------------------
+  begin
+     If to_share then
+     Begin
+       Auditor_File.Redirection        := True;
+       Auditor_File.FRAMESIZE          := 8;
+       Auditor_File.MINRECSIZE         := 1;
+       Auditor_File.MAXRECSIZE         := 1;
+       Auditor_File.BLOCKSTRUCTURE     := Value(FIXED);
+       Auditor_File.FILESTRUCTURE      := Value(STREAM);
+       Auditor_File.FILEORGANIZATION   := Value(NOTRESTRICTED);
+       Auditor_File.ANYSIZEIO          := TRUE;
+       Auditor_File.NEWFILE            := TRUE
+       ;
+       Auditor_fileName_ptr := Auditor_FileName;
+       replace Auditor_fileName_ptr:Auditor_fileName_ptr by
+                Auditor_fileName_prefix_share
+                , db_name, "/AUDIT_"
+               , auditno for * digits, "_";
+
+       replace Auditor_fileName_ptr by AuditorNo for * digits, ".";
+       replace Auditor_file.fileName by Auditor_FileName;
+       DISPLAY(AUDITOR_FILENAME);
+     End
+     Else
+     Begin
+      Auditor_File.kind        := Value(Disk);
+      Auditor_File.Framesize   := 8;
+      Auditor_File.MaxRecSize  := Auditor_buffer_size;
+      % max cande will handle
+      Auditor_File.BlockSize   := (Auditor_buffer_size*34);
+      Auditor_File.Protection  := Value(save);
+
+      Auditor_fileName_ptr := Auditor_FileName;
+      replace Auditor_fileName_ptr:Auditor_fileName_ptr by
+             Auditor_fileName_prefix, db_name, "/AUDIT/"
+            , auditno for * digits, "/";
+
+      replace Auditor_fileName_ptr by AuditorNo for * digits, ".";
+      replace Auditor_file.fileName by Auditor_FileName;
+       DISPLAY(AUDITOR_FILENAME);
+
+     end;
+ End;
+% ---------------------------------------------------------------------
+
+  Procedure New_Auditor_File;
+% ------------------------
+
+  %--------------------------------------------------------------------%
+  %                                                                    %
+  %  Releases the current Auditor file, alters the Auditor title suffix%
+  %  and continues with a new Auditor file.                            %
+  %                                                                    %
+  %--------------------------------------------------------------------%
+
+  Begin
+    AuditorNo := * + 1;
+    Auditor_write_count := 0;
+    If to_share Then
+    Begin
+     replace Auditor_fileName_ptr by AuditorNo for * digits, ".";
+     replace Auditor_file.fileName by Auditor_FileName;
+    End
+    Else
+    Begin
+     replace Auditor_FileName_ptr by AuditorNo for * digits, ".";
+     replace Auditor_File.FileName by Auditor_FileName;
+    End;
+  End;
+
+% ---------------------------------------------------------------------
+
+  Procedure End_Auditor_File;
+% ------------------------
+
+  %--------------------------------------------------------------------%
+  %                                                                    %
+  %  Releases the current Auditor file.                                %
+  %                                                                    %
+  %--------------------------------------------------------------------%
+
+  Begin
+    Lock (Auditor_file, crunch);
+  End;
+
+% ---------------------------------------------------------------------
+
+  procedure Auditor ;%(msg);
+% ---------------
+%    array msg[0];
+  begin
+    pointer p;
+    p := pointer(msg[0]);
+
+    if Auditor_write_count eql 0 then
+     If to_share Then
+      begin
+        replace Auditor_buff[0] by
+          "Date,Time,DataBase,Structure,Operation,AuditNo,AuditBn,",
+          "RecordSerialNumber,Stack,Aborted", CrLf;
+        write(Auditor_File, 89, Auditor_buff[0]);
+      end
+      else
+      begin
+        replace Auditor_buff[0] by
+          "Date,Time,DataBase,Structure,Operation,AuditNo,AuditBn,",
+          "RecordSerialNumber,Stack,Aborted",
+          " " for Auditor_buffer_size-87;
+        write(Auditor_File, Auditor_buffer_size, Auditor_buff[0]);
+      end;
+
+    If to_share
+    Then
+    Begin
+    replace Auditor_buff[0] by p:p for offset(pmsg);
+    write(Auditor_File, offset(pmsg), Auditor_buff[0]);
+    End
+    Else
+    Begin
+    replace Auditor_buff[0] by p:p for Auditor_buffer_size;
+    write(Auditor_File, Auditor_buffer_size, Auditor_buff[0]);
+    End;
+    Auditor_write_count := * + 1;
+
+    if Auditor_write_count >= Auditor_write_max then
+    Begin
+      End_Auditor_File;
+      new_Auditor_file;
+    End;
+   End Auditor;
+%
+procedure Open_Audit;
+  begin
+   AUDIT_OPEN (us_name cat db_name,aud_pck, auditno, 1, false);
+  end;
+%
+boolean procedure HandleAuditReads ;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+begin
+ define
+   MaxAbsn            = 4294962926 #;
+ real
+   struc,
+   recordsn,
+   auddate,
+   audsnr;
+ integer
+   rem,
+   dtlen;
+ boolean
+   cnv_usstd,
+   display_juldate,
+   intl_typ;
+%    pointer
+%      pmsg;
+ label
+   xit;
+
+ HandleAuditReads:= true;
+ struc:= 0 & audsnf[23:24];
+ if struc neq 2 then %% it's not auditarea
+   begin
+      If cand(type eql dsm,
+              not(boolean(AUDIT_BUFFERS[lb,ub+1].AUDMODIFYF))) then
+              type :=  999; %skip this dsm record
+      case type of
+       begin
+         sac:sad:sam:
+           isaborted:= boolean(AUDIT_BUFFERS[lb,ub].audsaflagf);
+
+         dsc:dsd:dsm:
+           % don't have to look at data yet just the Audit attributes
+           % and RSN
+              pmsg:= pointer(msg);
+              replace pmsg by " " for size(msg)*6;
+
+              auddate:=ali_info[ali_blk_datestamp];
+              dmformattime6(cnv_usstd,auddate
+                           ,display_juldate,intl_typ
+                           ,intl_conv,intl_lang,dtlen
+                           ,conv_ary);
+
+              recordsn:= AUDIT_BUFFERS[lb,ub+3];% not sectioned
+              audsnr:=ali_info[ali_rec_processid];
+
+              replace pmsg:pmsg by conv_ary[0] for rem:dtlen
+                                               until eql space,comma;
+           %   leave time out for the moment - it's in 5.0
+              rem:=*-1; % step over space
+              replace pmsg:pmsg by conv_ary[dtlen-rem] for rem
+                                  ,comma
+                                  ,db_name
+                                  ,comma;
+              If struct_name[struc,0] neq 48"00" then
+              Begin
+                 replace pmsg:pmsg by
+                         struct_name[struc,1] until = 48"00",",";
+              if type eql dsc then
+                replace pmsg:pmsg by "Insert,"
+              else if type eql dsd then
+                replace pmsg:pmsg by "Delete,"
+              else if type eql dsm then
+                replace pmsg:pmsg by "Update,";
+
+              If struct_name[struc,0] eql "1" then
+                 replace pmsg:pmsg by dbAuditno for * digits,comma,
+                 curr_absn for * digits,comma,
+                 recordsn for * digits,comma,
+                 audsnr for * digits,comma
+              else
+                 replace pmsg:pmsg by dbAuditno for * digits,comma,
+                 curr_absn for * digits,comma,
+                 "no_rsn",comma, audsnr for * digits,comma;
+
+              if isaborted then
+                replace pmsg:pmsg by "Y"
+              else
+                replace pmsg:pmsg by " ";
+
+              isaborted:= false;
+              if to_share then replace pmsg:pmsg by CrLf;
+              Auditor;%(msg);
+              End;
+         else: donothing;%replace pmsg:pmsg by type for * digits,",";
+       end;
+   end;
+end;
+%
+boolean procedure HandleAuditEOF ;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+begin
+ label xit;
+ define MaxAudit = 9999 #;
+ HandleAuditEOF:= true;
+
+ xit:
+end;
+%
+boolean procedure HandleAuditStopper;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+begin
+ HandleAuditStopper:= true;
+
+end;
+%
+procedure Process_Audit;
+begin
+ boolean brslt,
+         fswitch;
+ real rslt = brslt,
+      str;
+
+ label xit;
+
+ while true do
+    begin
+      %% and away we go
+      dbAuditno:= alf_info[alf_filenumber];
+%         fswitch:= dm_audit gtr dbAuditno;
+      fswitch := false; %No next audit
+      brslt := audit_next_record(fswitch,curr_absn,type,
+                                 audsnf,audsze,lb,ub);
+
+      case (rslt.[19:16]) of
+        begin
+          aeok:
+            if not HandleAuditReads then
+              begin
+                display("HandleAuditReads");
+                go xit;
+              end;
+
+          aeendoffilev:
+            if not HandleAuditEOF then
+              begin
+                display("HandleAuditEOF");
+                go xit;
+              end;
+            go xit;
+          aeauditstopperv: % stopper pattern
+            if not HandleAuditStopper then
+              begin
+                display("HandleAuditStopper");
+                go xit;
+              end;
+            go xit;
+          else:
+            display(string(rslt,*));
+            go xit ;
+        end;
+
+    end;
+
+ xit:
+end of processaudit;
+%
+Procedure Read_param;
+Begin
+  scan pointer(usr[0]) for param_length:100 until = 48"00";
+  param_length := 100-param_length;
+  us_name := string(usr,param_length);
+  scan pointer(datadb[0]) for param_length:100 until = 48"00";
+  param_length := 100-param_length;
+  db_name := string(datadb,param_length);
+  scan pointer(apck[0]) for param_length:100 until = 48"00";
+  param_length := 100-param_length;
+  aud_pck := string(apck,param_length);
+End of Read_param;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% From the config we build a two dimensional array the structure number
+% is the index, the first pos of the row indicates extended, next is
+% the name of the structure.
+% The extended option in queried via the dmsupport
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Procedure Read_Config;
+Begin
+
+   Array Inp[0:6]
+        ,Config_FileName
+        ,dmsup_name[0:29]
+        ,properties[0:0]
+        ;
+   String str_name;
+   Boolean extended, dbpckb;
+   Integer n, str_num;
+   Pointer p, Config_fileName_ptr, dmsup_namep;
+   Truthset Numbers ("0123456789");
+   File config_file  ( kind = disk
+                     , dependentspecs = true
+                     , myuse  = in
+                     );
+   Config_fileName_ptr := Config_FileName;
+       replace Config_fileName_ptr:Config_fileName_ptr by
+                "CONFIG/", db_name,".";
+       replace Config_file.fileName by Config_FileName;
+
+   While not read(config_file,40,Inp) do
+   Begin
+     If pointer(Inp[0]) neq "%" then
+     Begin
+      p := pointer(Inp[0]);
+      If not dbpckb then
+      Begin
+       scan p for param_length:100 until = " ";
+       param_length := 100-param_length;
+       db_pack := string(p,param_length);
+       Replace dmsup_namep:= pointer(dmsup_name) by
+       us_name, "DMSUPPORT/", db_name, " ON ", db_pack, ".";
+       replace Dmsupport.title by dmsup_namep;
+       dbpckb := true;
+      End
+      Else
+      Begin
+         str_name := Head (string(p,40), NOT " ");
+         scan p:p For n:40 until = " ";
+         If n neq 0 then
+         Begin
+          scan p:p For n:n until in Numbers;
+          scan p   For n:n until = " ";
+          str_num := integer(p,40-n-offset(p));
+          init_properties(str_num, properties);
+          extended:= boolean(properties[newplateau]);
+          if extended then replace struct_name[str_num,0]
+                                   by "1",str_name
+                      else replace struct_name[str_num,0]
+                                   by "0",str_name;
+         End
+         Else
+         Begin
+          Display(" no strcuture nr");
+          Myself.Status := value(Terminated);
+         End
+      End;
+     End;
+   End;
+End of Read_Config;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%Start
+  Read_param;
+  Read_Config;
+  Initialise_Auditor_File;
+  Open_Audit;
+  Process_Audit;
+  End_Auditor_File;
+end.

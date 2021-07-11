@@ -1,0 +1,4165 @@
+% VERSION  1.87  ; SAVED 20180810 13:38:36                    |DCK
+$ SET LEVEL 2 LIST  LINEINFO XREFFILES  TADS (REMOTE ECRAN)
+ $ Reset DataBridge
+%
+%                        DC
+%                       _____
+%                      / \   \
+%                     /   \   \
+%                    /  \  \   \
+%                   /  / \  \   \
+%                  /  /  /\  \   \
+%                 /  /  /  \  \   \
+%                /  /  /    \  \   \
+%               /  /  /      \  \   \
+%              /  /  /________\__\   \
+%             /  /  /_________________\
+%             \ /                     /
+%              \_____________________/
+%
+%                       History
+%                       -------
+%  03/Nov/2016  R01 to install DataBridge DMSIISUPPORT as *
+%  07/Feb/2017  Do not remove audit if unaudited database *
+%  30/May/2018  Add CopyReorgReports
+%               Include MIXNUMBER with DBA100 Report
+%               Use DMS591 Properties
+%  06/Jun/2018  Only CopyReorgReports if doing a Reorg
+%
+$ SET LEVEL 2 LIST LINEINFO
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE WFL_GENERATOR(PAR_ARR);
+%---------------------------------
+
+ARRAY   PAR_ARR[*];
+
+BEGIN
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%%                                                                    %%
+%%%                         DECLARATIONS                             %%%
+%%                                                                    %%
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+FILE    ECRAN (KIND = REMOTE, MAXRECSIZE = 1920, UNITS = 1, MYUSE = 3),
+        WFLOW (KIND = DISK, MAXRECSIZE = 15, BLOCKSIZE = 420,
+               FILEKIND = 75, SAVEFACTOR = 30),
+        WFLWR (KIND = DISK, MAXRECSIZE = 15, BLOCKSIZE = 420,
+               FILEKIND = 75, SAVEFACTOR = 30),
+        WFLWS (KIND = DISK, MAXRECSIZE = 15, BLOCKSIZE = 420,
+               FILEKIND = 75, SAVEFACTOR = 30),
+        WFLDEL(KIND = DISK, MAXRECSIZE = 15, BLOCKSIZE = 420,
+               FILEKIND = 75, SAVEFACTOR = 30),
+        WFLVFD(KIND = DISK, MAXRECSIZE = 15, BLOCKSIZE = 420,
+               FILEKIND = 75, SAVEFACTOR = 30),
+        WDXFR (KIND = DISK, MAXRECSIZE = 17, BLOCKSIZE = 510),
+        DASDL (KIND = DISK, FILETYPE = 7);
+
+ARRAY
+        BL0_ARR           ,             % BLOCK ZERO
+        BLB_ARR           ,             % BLOCK DATA BASE
+        BLS_ARR     [0: 0];             % BLOCK STRUCTURE
+
+EBCDIC ARRAY
+        OPT         [0:17],             % OPTIONS
+        DAT         [0:11],             % DATE OF REORG.
+        WORKARRAY         ,             % ARRAY DE TRAVAIL
+        WORKARRY          ,             % ARRAY DE TRAVAIL
+        SAVSTRARY         ,             % STR. TO BE SAVED
+        INISTRARY         ,             % STR. TO BE INITIALIZED
+        REOSTRARY [0:9999],             % STR. TO BE REORGANIZED
+        SCREEN            ,             % FORMAT SCREEN
+        ACTION            ,             % OUTPUT SCREEN
+        PARAM     [0:1919],             % INPUT  SCREEN
+        BAS_ACRNAME       ,             % NOM DES ACCESSROUTINES
+        BAS_DMSUP         ,             % NOM DU DMSUPPORT
+        BAS_RECON         ,             % NOM DU RECONSTRUCT
+        BAS_RECOV         ,             % NOM DU RECOVERY
+        BAS_REORG         ,             % NOM DE LA REORGANIZATION
+        BAS_DATARCV [0:59],             % NOM DU DATARECOVERY
+        BAS_DBNAME        ,             % NOM DE LA BASE
+        BAS_PKAUDIT       ,             % PACK AUDIT
+        BAS_PKCNTRL       ,             % PACK CONTROL
+        BAS_USERCODE      ,             % USERCODE
+        DAT_DSNAME        ,             % NOM DATA SET
+        DAT_PKNAME        ,             % PACK DATA SET
+        DEF_DBPKNAME      ,             % FAMILYNAME DB  (DEFAULT)
+        DEF_DSPKNAME      ,             % FAMILYNAME DS  (DEFAULT)
+        DEF_SPKNAME       ,             % FAMILYNAME SET (DEFAULT)
+        SET_IXNAME        ,             % NOM SET
+        SET_PKNAME  [0:17];             % PACK SET
+
+EBCDIC ARRAY EA[0:249];
+
+ARRAY
+        AWFL        [0:14],             % LIGNE DU WFL
+        AXFR1       [0:16],             % First line of REOTXT
+        AXFR2       [0:16],             % Second line of REOTXT
+        JOB_TIT           ,             % NOM DU WFL
+        DAS_TIT     [0: 9],             % NOM DE LA DESCRIPTION FILE
+        STRARY   [0:0,0:4],             % RELATIONS STRUCTURES
+        APARAM[0] = PARAM[*];           % INPUT
+
+INTEGER
+        L1,L2,L3,L4,L5,
+        LOOP,
+        SEQNUM,                         % NUMERO DE SEQUENCE DU WFL
+        SEQNBR,                         % NO. SEQUENCE DU "CASE"
+        ISC1,                           % OFFSET SCREEN 1
+        ISC2,                           % OFFSET SCREEN 2
+        ISC3,                           % OFFSET SCREEN 3
+        COPS,                           % NOMBRE DE COPIES
+        WRKS,                           % WORKERS
+        TAPS,                           % TAPES
+        I,                              % COMPTEUR
+        J,                              % COMPTEUR
+        K,                              % COMPTEUR
+        N,                              % COMPTEUR
+        MAXROW,                         % NBR. MAX ROW STRARY
+        MAXCOL,                         % NBR. MAX COL STRARY
+        INXS,                           % INDICE DE BOUCLE STRUCTURE
+        NOF_CHR,                        % NOMBRE DE CARACTERES
+        DAS_ADD,                        % ADRESSE DISK DESCRIPTION
+        WRD_ADD,                        % INDICE DANS UN BLOCK
+        OLD_MST,                        % DERNIER BLOCK MASTER LU
+        BEG_BLK,                        % INDICE DEBUT ADDR BLOCK
+        NOF_BLK,                        % NOMBRE DE BLOCKS
+        BLK_DBS,                        % NUMERO BLOCK DATA BASE
+        BEG_LST,                        % INDICE DEBUT LISTE
+        STR_ADD,                        % INDICE LISTE
+        NOF_STR,                        % NOMBRE DE STRUCTURES
+        OLD_BST,                        % DERNIER BLOCK STRUCTURE LU
+        BLK_STR,                        % NUMERO BLOCK STRUCTURE
+        BEG_STR,                        % INDICE DEBUT STRUCTURE
+        BEG_DBS,                        % INDICE DEBUT LISTE DATA BASE
+        BLK_MAS,                        % NUMERO BLOCK STRUCT MASTER
+        BEG_MAS,                        % INDICE DEBUT STRUCT MASTER
+        BL0_TXT,                        % DEBUT TEXTE BLOCK ZERO
+        BLB_TXT,                        % DEBUT TEXTE BLOCK DATA BASE
+        BLS_TXT,                        % DEBUT TEXTE BLOCK STRUCTURE
+        BLM_TXT,                        % DEBUT TEXTE BLOCK MASTER
+        STR_REO,                        % REORG. INFO NODE
+        STR_NUM,                        % STRUCTURE NUMBER
+        MAS_NUM;                        % STRUCTURE NUMBER (MASTER)
+
+INTEGER
+        BAS_SOFTLEVEL    ,              % DATA BASE: NIVEAU SOFTWARE
+        BAS_UPDLEVEL     ;              % DATA BASE: UPDATE LEVEL
+
+BOOLEAN
+        BAS_AUDITED      ,              % DATA BASE: AUDITED
+        BAS_REORGREQ     ,              % DATA BASE: REORG. REQUIRED
+        STR_NEW          ,              % NEW STRUCTURE
+        STR_GENBYREORG   ,              % MUST BE GENERATED BY REORG
+        SVDBBEFORE       ,              % SAVE DB BEFORE REORG
+        SVDBBEFOFF       ,              % SAVE DB BEFORE REORG OFFLINE
+        SVSTRUCT         ,              % SAVE ANY STRUCTURES BEF. REO
+        UPDCONTROL       ,              % UPDATE CONTROL (MANUALLY)
+        INITSTRUCT       ,              % INITIALIZE NEW STRUCTURES
+        INITSTRBEF       ,              %     "       "     "       BEF.
+        INITSTRAFT       ,              %     "       "     "       AFT.
+        GENWFLREO        ,              % GENERATE WFL FOR REORG.
+        GENWFLRES        ,              % GENERATE WFL FOR RESTORE
+        GENWDXFER        ,              % GENERATE FILE FOR TRANSFER
+        SVDBAFTER        ,              % SAVE DB AFTER REORG
+        SVDBAFTOFF       ,              % SAVE DB AFTER REORG OFFLINE
+        NEWSOFT          ,              % INSTALL NEW SOFTWARE
+        NEWINQ           ,              % INSTALL NEW INQUIRIES
+        NEWDARGAL        ,              % INSTALL NEW URSA/DARGAL SOFT
+        NEWDATABRIDGE    ,              % INSTALL/SAVE DATABRIDGE
+        NEWBYJOB                        % INSTALL NEW PRG/LIBS BY A JOB
+        ,USEREORGDB
+        ,AUTOSWAP
+        ;
+STRING
+        S,                              % STRING DE TRAVAIL
+        SDUW,
+        SDUT,
+        SCOW,
+        SDBNAME,                        % DATABASE NAME
+        S02,                            % Name of the database after 'B'
+        S03,                            % NOM DU PACK (DATA)
+        S04,                            % NOM DU PACK (AUDIT)
+        S05,                            % NOM DU PACK (CONTROL)
+        S06,                            % NOM DU PACK (DMSUPPORT)
+        S07,                            % NOM DU PACK (PROGRAMS)
+        S08,                            % USERCODE PROGRAMS
+        S09,                            % PASSWORD PROGRAMS
+        S10,                            % USERCODE BASE
+        S11,                            % RELEASE ('DMSXXX')
+        S12,                            % SIGLE NOUVEAUX PROG.
+        S13,                            % LABEL
+        S13P,                           %       PREFIX
+        S13C,                           %       COPIES
+        S13S,                           %       SUFFIX (MMD/YYM)
+        S14, SDENS,                     % DENSITY
+        S15,                            % WORKERS
+        S16,                            % TAPES
+        S17,                            % MARKID
+        S18,                            % USERCODE PROGRAMME (XXXX)
+        S19,                            % STRING INIT. STRUCT.
+        S20,                            % STRING REORG. STRUCT.
+        S21,                            % USERCODE DU DMSUPPORT
+        S22,                            % NOM DU DMSUPPORT
+        S23,                            % NOM DU PACK (WORK)
+        S24,                            % BLOCKSIZE
+        S25,                            % STEPXX FOR INIT STRUCTURE
+        S26,                            % USERCODE DATABRIDGE
+        S27,                            %
+        S28,                            % UPDATE LEVEL
+        S29C,                           % CURRENT UPDATE LEVEL (DBR)
+        S29N,                           % NEW UPDATE LEVEL (DBR)
+        S30,                            % SUFF. ON/OFF DU LABEL
+        S31,                            % PREFIXE SAUVETAGE (DBAOLD)
+        S32,                            % DATE DU RUN (YYYYMMDD)
+        S33,                            % LABEL DU DUMP
+        S34,                            % LABEL STD DUP
+        S35,                            % STRING LABEL DANS LE JOB
+        S36,                            % OFFLINE OR BLANK
+        S37,                            % CHARGE CODE
+        S38                             % Just for move the point
+        ,SPCIP
+        ,SSERVER
+        ,SRFC
+        ,SUSEREORGDB
+        ,SAUTOSWAP
+        ;
+
+LABEL
+        LOOP_STR,
+        END_LOOP,
+        DISPLAY_SC1,
+        DISPLAY_SC2,
+        DISPLAY_SC3,
+        DISPLAY_SC4,
+        DISPLAY_SC5,
+        CREATION_OF_WFL,
+        EOJ;
+
+POINTER
+        PA,
+        PB,
+        PC,
+        PJOB_TIT,                       % PTR NOM DU WFL
+        PDAS_TIT,                       % PTR NOM DES LA DESCRIPTION
+        PT,PT1,PT2,PT3,                 % PTR INPUT
+        POUT,                           % PTR OUTPUT
+        PSCR,                           % PTR SCREEN
+        PWFL,                           % PTR LIGNE WFL
+        PXFR1,                           % PTR LIGNE XFER
+        PXFR2;                           % PTR LIGNE XFER
+TRUTHSET
+        QUOPNT(48"7F4B"),               % DELIMITEURS DANS DESC.
+        LPRPST("()*");                  % DELIMITEURS USERCODE
+
+TRANSLATETABLE
+        UPCASE(EBCDIC TO EBCDIC,
+              "abcdefghijklmnopqrstuvwxyz" TO
+              "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+
+DEFINE
+        NODEBLOCK = 47:16 #,            % NODE: NUMERO DE BLOCK
+        NODESTRLS = 31:16 #,            % NODE: INDICE ADD LISTE
+        NODEPROLS = 15:16 #;            % NODE: INDICE ADD PROP
+
+DEFINE
+        CLEAR   = 48"0C"#,
+        CR      = 48"0D"#,
+        FS      = 48"1C"#,
+        US      = 48"1F"#,
+        RS      = 48"1E"#,
+        SO      = 48"0E"#,
+        SUB     = 48"3F"#,
+        NUL     = 48"00"#,
+        HOME    = 48"3C"#,
+        FORMS   = 48"27E63C0000"#;
+
+DEFINE
+        STRN(X) = STRARY[X,0].[47:12]#,
+        MASN(X) = STRARY[X,0].[35:12]#,
+        REON(X) = STRARY[X,0].[23:16]#,
+        NEWF(X) = STRARY[X,0].[ 7: 7]#,
+        STRT(X) = STRARY[X,0].[ 0: 1]#,
+        NAMS(X) = POINTER(STRARY[X,2])#,
+        IP(X)   = I := I + X#,
+        B(X)    = REPEAT(" ",X)#,
+        C(X)    = REPEAT("%",X)#,
+        T(X)    = REPEAT("-",X)#;
+
+DEFINE
+        VALCHR  = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890*"#,
+        VALCHRS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890*-"#,
+        VALNUM  = "1234567890"#;
+
+DEFINE  SCR01   = CLEAR,SO,
+        B(9),"DMSII  TOOLS     -     WORK  FLOW  GENERATOR",CR,CR,
+        " ACTION: ",US,PT:PT FOR 69,RS,
+        B(10),"Quit  Create  +/-",CR,CR,
+        "DATABASE",
+                 B(07),"Name       ",FS,PT:PT FOR 17,RS,
+                  B(05),"Usercode  ",US,PT:PT FOR  9,RS,CR,CR,
+        "LEVEL   ",
+                 B(07),"Software   ",US,PT:PT FOR  6,RS,
+                  B(16),"Update    ",US,PT:PT FOR  3,RS,CR,CR,
+        "PACKNAME",
+                 B(07),"Control    ",US,PT:PT FOR  9,RS,
+                  B(13),"Audit     ",US,PT:PT FOR  9,RS,CR,
+                 B(15),"Dataset    ",US,PT:PT FOR  9,RS,
+                  B(13),"Set       ",US,PT:PT FOR  9,RS,CR,
+                 B(15),"Dmsupport  ",US,PT:PT FOR  9,RS,CR,CR,
+        "APPLICATION",
+                 B(04),"Sigle      ",US,PT:PT FOR  3,RS,
+                  B(19),"Usercode  ",US,PT:PT FOR  9,RS,CR,CR,
+        "REORGANIZATION",
+                              B(12),US,PT:PT FOR  1,RS,CR,CR,
+        "UPDATE CONTROL",
+                              B(12),US,PT:PT FOR  1,RS,CR,CR,
+        "MARKID",
+                              B(20),US,PT:PT FOR  8,RS,
+                  FORMS#;
+DEFINE  SCR02   = CLEAR,SO,
+        B(9),"DMSII  TOOLS     -     WORK  FLOW  GENERATOR",CR,CR,
+        " ACTION: ",US,PARAM FOR 69,RS,
+        B(10),"Quit  Create  +/-",CR,CR,
+        "DUMP",
+             B(07),"Before      ",US,PT:PT FOR  1,RS,
+                      " Offline ",US,PT:PT FOR  1,RS,
+             B(08),"After       ",US,PT:PT FOR  1,RS,
+                      " Offline ",US,PT:PT FOR  1,RS,CR,CR,
+             B(11),"Label       ",US,PT:PT FOR 12,RS,
+             B(09),"Copies      ",US,PT:PT FOR  1,RS,
+                      " MDD/YYM ",US,PT:PT FOR  3,RS,CR,CR,
+             B(11),"Density     ",US,PT:PT FOR 10,RS,
+             B(11),"Workers     ",US,PT:PT FOR  1,RS,
+                      " Tapes   ",US,PT:PT FOR  1,RS,CR,CR,
+             B(11),"Blocksize   ",US,PT:PT FOR  6,RS,CR,CR,CR,
+        "STRUCTURES",
+                  " Save        ",US,PT:PT FOR  1,RS,
+             B(20),"Initialize  ",US,PT:PT FOR  1,RS,CR,CR,
+        "INSTALL",
+             B(04),"DMS Software",US,PT:PT FOR  1,RS,
+             B(20),"Inquiries   ",US,PT:PT FOR  1,RS,CR,
+             B(11),"Run COPY job",US,PT:PT FOR  1,RS,
+             B(20),"Ursa/Dargal ",US,PT:PT FOR  1,RS,CR,CR,
+ $ Set Omit = Not DataBridge
+             B(11),"DataBridge  ",US,PT:PT FOR  1,RS,CR,CR,CR,
+ $ Pop Omit
+        "PLANNING",
+             B(03),"File REOTXT ",US,PT:PT FOR  1,RS,
+                  FORMS#;
+DEFINE  SCR03   = CLEAR,SO,                                       % 2
+        B(9),"DMSII  TOOLS     -     WORK  FLOW  GENERATOR",CR,CR,%55
+        " ACTION: ",US,PARAM FOR 69,RS,                           %80
+        B(10),"Quit  Create  +/-",CR,CR,                          %29
+        SUB,B(28),"STRUCTURES TO BE SAVED",CR,CR#;    % 219       %54
+DEFINE  SCR031  =
+        B(5),US,PT1:PT1 FOR 18,RS,                                %25
+        B(5),US,PT1:PT1 FOR 18,RS,                                %25
+        B(5),US,PT1:PT1 FOR 18,RS,B(5)#;              %  80       %30
+DEFINE  SCR04   = CLEAR,SO,                                       % 2
+        B(9),"DMSII  TOOLS     -     WORK  FLOW  GENERATOR",CR,CR,%55
+        " ACTION: ",US,PARAM FOR 69,RS,                           %80
+        B(10),"Quit  Create  +/-",CR,CR,SUB,B(23),                %53
+        "TO BE INITIALIZED AFTER UPDATE",CR,CR#;      % 224       %32
+DEFINE  SCR041  = CR,SUB,B(23),                                   %25
+        "TO BE INITIALIZED BEFORE UPDATE",CR,CR#;     %  57       %33
+
+DEFINE SETREO(WHATSTEP,PON) = REPLACE PXFR1:PXFR1 BY ",",WHATSTEP;
+                          REPLACE PXFR2:PXFR2 BY ","
+                            , IF PON THEN 80"X" ELSE 80" " FOR 1#;
+
+$ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%%                                                                    %%
+%%%          INCLUDE DATABASE/PROPERTIES  20000000-21999999          %%%
+%%                                                                    %%
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ $ INCLUDE PROPERTIES = "DATABASE/DMS591/PROPERTIES" 20000000-21999999
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+$ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%%                                                                    %%
+%%%                            PROCEDURES                            %%%
+%%                                                                    %%
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               PROCEDURE DE TRANSFER                                  %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+ PROCEDURE PROCXFER (A_SHEET);
+%-----------------------------
+ ARRAY A_SHEET[*];
+ EXTERNAL;
+%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               PROCEDURE DE COMPARAISON DU MERGE                      %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+ BOOLEAN PROCEDURE CMP(A,B);
+%---------------------------
+
+ARRAY A,B[0];
+
+BEGIN
+
+  CMP := POINTER(A) + 83 LEQ POINTER(B) + 83 FOR 8;
+
+END;
+%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               PROCEDURE D ECRITURE DE LA PARTIE SELECTION DU WFL     %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+ PROCEDURE WWFS (S);
+%-------------------
+
+STRING S;
+
+BEGIN
+
+  REPLACE PWFL BY " " FOR 15 WORDS;
+  REPLACE PWFL:PWFL BY S;
+  REPLACE PWFL BY " :";
+  PWFL := POINTER(AWFL);
+  REPLACE PWFL + 82 BY SEQNUM := * + 1000 FOR 8 DIGITS;
+  WRITE(WFLOW,15,AWFL[*]);
+
+  REPLACE PWFL BY " " FOR 15 WORDS;
+  REPLACE PWFL + 82 BY SEQNUM := * + 1000 FOR 8 DIGITS;
+  WRITE(WFLOW,15,AWFL[*]);
+
+  REPLACE PWFL BY " " FOR 15 WORDS;
+  REPLACE PWFL BY " INITIALIZE (TT1);";
+  REPLACE PWFL + 82 BY SEQNUM := * + 1000 FOR 8 DIGITS;
+  WRITE(WFLOW,15,AWFL[*]);
+
+  REPLACE PWFL BY " " FOR 15 WORDS;
+  REPLACE PWFL BY " BB1 := FALSE;";
+  REPLACE PWFL + 82 BY SEQNUM := * + 1000 FOR 8 DIGITS;
+  WRITE(WFLOW,15,AWFL[*]);
+
+  REPLACE PWFL BY " " FOR 15 WORDS;
+  REPLACE PWFL + 82 BY SEQNUM := * + 1000 FOR 8 DIGITS;
+  WRITE(WFLOW,15,AWFL[*]);
+
+  REPLACE PWFL BY " " FOR 15 WORDS;
+  REPLACE PWFL:PWFL BY "  (",""";
+  REPLACE PWFL:PWFL BY S;
+  REPLACE PWFL:PWFL BY """,") : BEGIN AXCHECK(",""";
+  REPLACE PWFL:PWFL BY S;
+  REPLACE PWFL:PWFL BY ""","); GO TO ";
+  REPLACE PWFL:PWFL BY S;
+  REPLACE PWFL:PWFL BY "; END;";
+  PWFL := POINTER(AWFL);
+  REPLACE PWFL + 82 BY SEQNBR := * + 1 FOR 8 DIGITS;
+  WRITE(WFLWS,15,AWFL[*]);
+
+END OF WWFS;
+%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               PROCEDURE D ECRITURE DU WORKFLOW                       %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+ PROCEDURE WWFL (S);
+%---------------------
+
+STRING  S;
+
+BEGIN
+
+  REPLACE PWFL BY " " FOR 15 WORDS;
+  REPLACE PWFL BY S;
+  REPLACE PWFL + 82 BY SEQNUM := * + 1000 FOR 8 DIGITS;
+  WRITE(WFLOW,15,AWFL[*]);
+
+END OF WWFL;
+%
+PROCEDURE WWFLDEL (S);
+%---------------------
+STRING  S;
+
+BEGIN
+  REPLACE PWFL BY " " FOR 15 WORDS;
+  REPLACE PWFL BY S;
+  REPLACE PWFL + 82 BY SEQNUM := * + 1000 FOR 8 DIGITS;
+  WRITE(WFLDEL,15,AWFL[*]);
+END OF WWFL;
+%
+PROCEDURE WWFLVFD (S);
+%---------------------
+STRING  S;
+
+BEGIN
+  REPLACE PWFL BY " " FOR 15 WORDS;
+  REPLACE PWFL BY S;
+  REPLACE PWFL + 82 BY SEQNUM := * + 1000 FOR 8 DIGITS;
+  WRITE(WFLVFD,15,AWFL[*]);
+END OF WWFL;
+%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               DECOMPOSITION D UN NOM DE FICHIER                      %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+ PROCEDURE SCANTITLE (SX,SY1,SY2,SY3);
+%-------------------------------------
+
+STRING SX,SY1,SY2,SY3;
+
+BEGIN
+  STRING        S;
+  DEFINE        VALCHR  = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890/"#;
+  LABEL         EXIT;
+
+  S  := TAIL(SX," ");
+  IF LENGTH(S) < 1 THEN GO EXIT;
+  IF TAKE(S,1) = "*" THEN
+    BEGIN
+      SY1 := "*";
+      S   := DROP(S,1);
+    END
+    ELSE
+  IF TAKE(S,1) = "(" THEN
+    BEGIN
+      S   := TAIL(DROP(S,1)," ");
+      SY1 := HEAD(S,VALCHR);
+      S   := DROP(S,LENGTH(SY1) + 1);
+    END
+    ELSE
+      SY1 := EMPTY;
+
+  S   := TAIL(S," ");
+  SY2 := HEAD(S,VALCHR);
+  S   := DROP(S,LENGTH(SY2));
+
+  S   := TAIL(S," ");
+  SY3 := HEAD(S,VALCHR);
+  IF LENGTH(SY3) = 2 THEN
+    IF TAKE(S,2) = "ON" THEN
+      BEGIN
+        S   := DROP(S,2);
+        S   := TAIL(S," ");
+        SY3 := HEAD(S,VALCHR);
+      END;
+
+EXIT :
+
+END OF SCANTITLE;
+%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               EXTRACT PASSED PARAMETERS                              %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+BOOLEAN PROCEDURE READ_PAR;
+%---------------------------
+
+BEGIN
+  STRING        S01;
+  POINTER       PA;
+  INTEGER       N;
+  LABEL         EXIT;
+
+  SCAN PA:POINTER(PAR_ARR) UNTIL = 48"00";
+  IF N := OFFSET(PA) = 0 THEN GO EXIT;
+
+  PA := POINTER(PAR_ARR);
+  REPLACE PA BY PA FOR N WITH UPCASE;
+
+  S01 := TAIL(STRING(POINTER(PAR_ARR[0]),N)," ");
+
+  IF TAKE(S01,7) = "SERVER=" THEN
+  BEGIN
+    SSERVER := HEAD(DROP(S01,7),NOT ",");
+    S01 := DROP(S01,8 + LENGTH(SSERVER));
+  END;
+  IF TAKE(S01,3) = "IP=" THEN
+  BEGIN
+    SPCIP := HEAD(DROP(S01,3),NOT ",");
+    S01 := DROP(S01,4 + LENGTH(SPCIP));
+  END;
+  IF TAKE(S01,4) = "RFC=" THEN
+  BEGIN
+    SRFC := HEAD(DROP(S01,4),NOT ",");
+    S01 := DROP(S01,5 + LENGTH(SRFC));
+  END;
+  IF TAKE(S01,3) = "DB=" THEN
+  BEGIN
+    SDBNAME := HEAD(DROP(S01,3),NOT ",");
+    S01 := DROP(S01,4 + LENGTH(SDBNAME));
+  END;
+  IF TAKE(S01,8) = "REORGDB=" THEN
+  BEGIN
+    USEREORGDB := (HEAD(DROP(S01,8),NOT ",") = "T");
+    S01 := DROP(S01,9 + 1);
+  END;
+  IF USEREORGDB THEN
+  BEGIN
+      SUSEREORGDB := "USEREORGDB";
+  END
+  ELSE
+  BEGIN
+      SUSEREORGDB := " ";
+  END;
+  IF TAKE(S01,9) = "AUTOSWAP=" THEN
+  BEGIN
+    AUTOSWAP := (HEAD(DROP(S01,9),NOT ",") = "T");
+%    S01 := DROP(S01,10 + 1);
+  END;
+  READ_PAR := TRUE;
+
+EXIT :
+
+END OF READ_PAR;
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%              RECHERCHE DES STRUCTURES MODIFIEES                      %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+ PROCEDURE SEARCH_STRMOD (STR);
+%------------------------------
+
+VALUE   STR;
+INTEGER STR;
+
+BEGIN
+
+  INTEGER  I,
+           MAXCOL;
+
+  LABEL    SUITE,
+           EXIT;
+
+  IF MASN(STR) < 2 THEN
+    IF (REON(STR) = 0 AND NEWF(STR) = 0) THEN
+      GO TO SUITE
+      ELSE
+    IF (REON(STR) = 0 AND NEWF(STR) > 0) THEN
+      BEGIN
+        REPLACE PA:PA BY NAMS(STR) FOR 18;                      % IDS
+        GO TO EXIT;
+      END
+      ELSE
+    IF REON(STR) > 0 THEN
+      BEGIN
+        REPLACE PB:PB BY NAMS(STR) FOR 18;                      % SDS
+        REPLACE PC:PC BY "; GENERATE ",NAMS(STR) UNTIL = " ";   % GDS
+        GO TO SUITE;
+      END;
+
+  IF REON(STR) > 0 THEN
+    BEGIN
+      IF REON(MASN(STR)) > 0 THEN
+        REPLACE PC:PC BY ", ",NAMS(STR) UNTIL = " "          % GDS + GS
+        ELSE
+        BEGIN
+          REPLACE PC:PC BY "; GENERATE ",NAMS(STR) UNTIL = " "; % GDS
+          REPLACE PB:PB BY NAMS(STR) FOR 18;                    % SDS
+        END;
+      GO TO SUITE;
+    END;
+
+  IF NEWF(STR) > 0 THEN
+    BEGIN
+      IF REON(MASN(STR)) > 0 THEN
+        REPLACE PC:PC BY ", ",NAMS(STR) UNTIL = " "          % GDS + GS
+        ELSE
+        BEGIN
+          REPLACE PC:PC BY "; GENERATE ",NAMS(STR) UNTIL = " "; % GS
+%         REPLACE PB:PB BY NAMS(STR) FOR 18; % SDS
+        END;
+    END;
+
+SUITE :
+
+  MAXCOL := STRARY[STR,1];
+  IF MAXCOL > 0 THEN
+    FOR I := 5 STEP 1 UNTIL (MAXCOL + 4) DO
+      SEARCH_STRMOD (STRARY[STR,I]);
+
+EXIT :
+
+END OF SEARCH_STRMOD;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%              MISE EN FORME DE LA DATE DU JOUR                        %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+ PROCEDURE MAKE_DATE;
+%--------------------
+
+BEGIN
+
+  POINTER  PTA;
+  INTEGER  YY,MM,DD;
+  REAL     TIME7;
+
+  PTA := DAT[0];
+
+  TIME7  := TIME(7);
+  YY := TIME7.[47:12];
+  MM := TIME7.[35:06];
+  DD := TIME7.[29:06];
+  REPLACE PTA:PTA BY
+                     YY FOR 4 DIGITS,
+                     MM FOR 2 DIGITS,
+                     DD FOR 2 DIGITS;
+
+END OF MAKE_DATE;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%              LECTURE D UN BLOCK DE LA DESCRIPTION FILE               %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%
+ PROCEDURE READ_A_BLOCK(GET_ARR,DAS_ADD);
+%----------------------------------------
+
+  VALUE         DAS_ADD;
+  ARRAY         GET_ARR[0];
+  INTEGER       DAS_ADD;
+
+BEGIN
+
+  ARRAY         X[0:0];
+  INTEGER       INX,J,N,INXS;
+
+  READ(DASDL[DAS_ADD],1,X);
+
+  N    :=X[DESCBLOCKRECS];
+  INXS :=X[DESCBLOCKRECS] * 256 - 1;
+  J    :=0;
+
+  RESIZE(GET_ARR,INXS,PAGED);
+
+  FOR INX:=1 STEP 1 UNTIL N DO
+    BEGIN
+      READ(DASDL[DAS_ADD],256,GET_ARR[J]);
+      J      :=* + 256;
+      DAS_ADD:=* + 1;
+    END;
+
+END OF READ_A_BLOCK;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               RECHERCHE DES PROPERTIES DE LA BASE                    %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE FIND_DATABASE_PROP;
+%-----------------------------
+
+BEGIN
+
+  BOOLEAN OK;
+
+  DAS_ADD := 0;
+  READ_A_BLOCK(BL0_ARR,DAS_ADD);
+  BL0_TXT := BL0_ARR[TEXTBASELOC];
+
+  BEG_BLK := BL0_ARR[BLOCKDIRADDR];
+  NOF_BLK := BL0_ARR[BLOCKDIRSZ] - 2;
+
+  BLK_DBS := BL0_ARR[DBNODELOC].[NODEBLOCK];
+  BEG_LST := BL0_ARR[DBNODELOC].[NODESTRLS];
+  BEG_DBS := BL0_ARR[DBNODELOC].[NODEPROLS];
+
+  WRD_ADD := BEG_BLK + 1;
+  DAS_ADD := BL0_ARR[WRD_ADD].[NODEPROLS];
+  READ_A_BLOCK(BLB_ARR,DAS_ADD);
+  BLB_TXT := BLB_ARR[TEXTBASELOC];
+
+  REPLACE BAS_PKAUDIT[0] BY " " FOR 18;
+  REPLACE BAS_PKCNTRL[0] BY " " FOR 18;
+  REPLACE BAS_ACRNAME[0] BY " " FOR 60;
+  REPLACE BAS_DMSUP  [0] BY " " FOR 60;
+  REPLACE BAS_RECON  [0] BY " " FOR 60;
+  REPLACE BAS_RECOV  [0] BY " " FOR 60;
+  REPLACE BAS_DATARCV[0] BY " " FOR 60;
+
+%-------------------- NOM DU PACK AUDIT
+
+  IF WRD_ADD:=BLB_ARR[BEG_DBS + AUDITNODE] NEQ 0 THEN
+    BEGIN
+      BEG_STR := BLB_ARR[WRD_ADD].[NODEPROLS];
+      WRD_ADD := BLB_ARR[BEG_STR + PACKNAMETEXT] + BLB_TXT;
+      PA      := POINTER(BLB_ARR[WRD_ADD]);
+      PB      := BAS_PKAUDIT[0];
+      N       := 18;
+      WHILE PA NEQ "." DO
+        BEGIN
+          SCAN PA:PA WHILE = 48"7F";
+          REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+        END;
+      S04  := HEAD(STRING(BAS_PKAUDIT,18),VALCHR);       % PACK AUDIT
+    END;
+
+%-------------------- NOM DU PACK CONTROL
+
+  IF WRD_ADD := BLB_ARR[BEG_DBS + CONTROLFILENODE] NEQ 0 THEN
+    BEGIN
+      BEG_STR := BLB_ARR[WRD_ADD].[NODEPROLS];
+      IF WRD_ADD := BLB_ARR[BEG_STR + PACKNAMETEXT] NEQ 0 THEN
+        BEGIN
+          WRD_ADD := * + BLB_TXT;
+          PA      := POINTER(BLB_ARR[WRD_ADD]);
+          PB      := BAS_PKCNTRL[0];
+          N       := 18;
+          WHILE PA NEQ "." DO
+            BEGIN
+              SCAN PA:PA WHILE = 48"7F";
+              REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+            END;
+          S05  := HEAD(STRING(BAS_PKCNTRL,18),VALCHR);   % PACK CONTROL
+        END;
+    END;
+
+%-------------------- NOM DU PACK DE LA BASE
+
+  IF WRD_ADD := BLB_ARR[BEG_DBS + DBPACKNAMETEXT] NEQ 0 THEN
+    BEGIN
+      WRD_ADD := * + BLB_TXT;
+      PA      := POINTER(BLB_ARR[WRD_ADD]);
+      PB      := DEF_DBPKNAME[0];
+      N       := 54;
+      WHILE PA NEQ "." DO
+        BEGIN
+          SCAN PA:PA WHILE = 48"7F";
+          REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+        END;
+    END;
+
+%-------------------- NOM DU PACK DES DS
+
+  IF WRD_ADD := BLB_ARR[BEG_DBS + DSPACKNAMETEXT] NEQ 0 THEN
+    BEGIN
+      WRD_ADD := * + BLB_TXT;
+      PA      := POINTER(BLB_ARR[WRD_ADD]);
+      PB      := DEF_DSPKNAME[0];
+      N       := 54;
+      WHILE PA NEQ "." DO
+        BEGIN
+          SCAN PA:PA WHILE = 48"7F";
+          REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+        END;
+    END;
+
+%-------------------- NOM DU PACK DES SETS
+
+  IF WRD_ADD := BLB_ARR[BEG_DBS + SPACKNAMETEXT] NEQ 0 THEN
+    BEGIN
+      WRD_ADD := * + BLB_TXT;
+      PA      := POINTER(BLB_ARR[WRD_ADD]);
+      PB      := DEF_SPKNAME[0];
+      N       := 54;
+      WHILE PA NEQ "." DO
+        BEGIN
+          SCAN PA:PA WHILE = 48"7F";
+          REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+        END;
+    END;
+
+%-------------------- NOM DU USERCODE
+
+  IF WRD_ADD := BLB_ARR[BEG_DBS + CONTROLFILENODE] NEQ 0 THEN
+    BEGIN
+      BEG_STR := BLB_ARR[WRD_ADD].[NODEPROLS];
+      IF WRD_ADD := BLB_ARR[BEG_STR + USERCODETEXT] NEQ 0 THEN
+        BEGIN
+          WRD_ADD := * + BLB_TXT;
+          PA      := POINTER(BLB_ARR[WRD_ADD]);
+          PB      := BAS_USERCODE[0];
+          N       := 18;
+          WHILE PA NEQ "." DO
+            BEGIN
+              SCAN PA:PA WHILE = 48"7F";
+              REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+            END;
+          S10 := HEAD(STRING(BAS_USERCODE,18),VALCHR);   % USERCODE
+        END;
+    END;
+
+%-------------------- NOM DES ACCESSROUTINES
+
+  IF WRD_ADD:=BLB_ARR[BEG_DBS + ACRTITLETEXT] NEQ 0 THEN
+    BEGIN
+      WRD_ADD := * + BLB_TXT;
+      PA      := POINTER(BLB_ARR[WRD_ADD]);
+      PB      := BAS_ACRNAME[0];
+      N       := 54;
+      WHILE PA NEQ "." DO
+        BEGIN
+          SCAN PA:PA WHILE = 48"7F";
+          REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+        END;
+    END;
+
+%-------------------- NOM DU DMSUPPORT
+
+  IF WRD_ADD := BLB_ARR[BEG_DBS + DMSUPPORTTITLETEXT] NEQ 0 THEN
+    BEGIN
+      WRD_ADD := * + BLB_TXT;
+      PA      := POINTER(BLB_ARR[WRD_ADD]);
+      PB      := BAS_DMSUP[0];
+      N       := 54;
+      WHILE PA NEQ "." DO
+        BEGIN
+          SCAN PA:PA WHILE = 48"7F";
+          REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+        END;
+      S22 := STRING(BAS_DMSUP[0],OFFSET(PB));
+      SCANTITLE(S22,S21,S22,S06);
+    END;
+
+%-------------------- NOM DU RECOVERY
+
+  IF WRD_ADD := BLB_ARR[BEG_DBS + RECOVERYTITLETEXT] NEQ 0 THEN
+    BEGIN
+      WRD_ADD := * + BLB_TXT;
+      PA      := POINTER(BLB_ARR[WRD_ADD]);
+      PB      := BAS_RECOV[0];
+      N       := 54;
+      WHILE PA NEQ "." DO
+        BEGIN
+          SCAN PA:PA WHILE = 48"7F";
+          REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+        END;
+    END;
+
+%-------------------- NOM DU DATARECOVERY
+
+  IF WRD_ADD := BLB_ARR[BEG_DBS + DATARECOVERYTITLETEXT] NEQ 0 THEN
+    BEGIN
+      WRD_ADD := * + BLB_TXT;
+      PA      := POINTER(BLB_ARR[WRD_ADD]);
+      PB      := BAS_DATARCV[0];
+      N       := 54;
+      WHILE PA NEQ "." DO
+        BEGIN
+          SCAN PA:PA WHILE = 48"7F";
+          REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+        END;
+    END;
+
+%-------------------- NOM DU RECONSTRUCT
+
+  IF WRD_ADD := BLB_ARR[BEG_DBS + RECONSTRUCTTITLETEXT] NEQ 0 THEN
+    BEGIN
+      WRD_ADD := * + BLB_TXT;
+      PA      := POINTER(BLB_ARR[WRD_ADD]);
+      PB      := BAS_RECON[0];
+      N       := 54;
+      WHILE PA NEQ "." DO
+        BEGIN
+          SCAN PA:PA WHILE = 48"7F";
+          REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+        END;
+    END;
+
+%-------------------- NOM DE LA REORGANISATION
+
+  IF WRD_ADD := BLB_ARR[BEG_DBS + REORGTITLETEXT] NEQ 0 THEN
+% IF WRD_ADD := BLB_ARR[BEG_DBS + ONLINEINITDUMPWFLTEXT] NEQ 0 THEN
+    BEGIN
+      WRD_ADD := * + BLB_TXT;
+      PA      := POINTER(BLB_ARR[WRD_ADD]);
+      PB      := BAS_REORG[0];
+      N       := 54;
+      WHILE PA NEQ "." DO
+        BEGIN
+          SCAN PA:PA WHILE = 48"7F";
+          REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+        END;
+    END;
+
+%-------------------- PROPERTIES DE LA BASE
+
+  BAS_SOFTLEVEL   := BLB_ARR[BEG_DBS+MARKNUMF        ];
+  BAS_AUDITED     := BLB_ARR[BEG_DBS+AUDITSET        ] > 0;
+  BAS_UPDLEVEL    := BLB_ARR[BEG_DBS+UPDATELEVELF];
+  IF BAS_REORGREQ := BLB_ARR[BEG_DBS+REORGREQ        ] > 0 THEN
+    BEGIN
+      S28 := STRING(BAS_UPDLEVEL,3);
+      REPLACE OPT[00] BY "Y" FOR 1;
+    END;
+  S29C := HEAD(TAIL(STRING(BAS_UPDLEVEL - 1, 3)," "),VALNUM);
+  S29N := HEAD(TAIL(STRING(BAS_UPDLEVEL, 3)," "),VALNUM);
+
+END OF FIND_DATABASE_PROP;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               RECHERCHE DES PROPERTIES DES DATASETS                  %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE FIND_DATASET_PROP;
+%----------------------------
+
+BEGIN
+  INTEGER L1,L2;
+
+%-------------------- NOM DU DATASET
+
+  L1 := BLS_ARR[BEG_STR + IDENTIFIERSZ];
+  L2 := 18 - L1;
+  REPLACE DAT_DSNAME BY
+          POINTER(BLS_ARR[BEG_STR + WORDONE]) + 1 FOR L1," " FOR L2;
+
+%-------------------- NOM DU PACK DU DATASET
+
+  WRD_ADD := BLS_ARR[BEG_STR + PACKNAMETEXT] + BLS_TXT;
+  PA      := POINTER(BLS_ARR[WRD_ADD]);
+  PB      := DAT_PKNAME;
+  N       := 18;
+
+  REPLACE PB BY " " FOR 18;
+
+  WHILE PA NEQ "." DO
+    BEGIN
+      SCAN PA:PA WHILE = 48 "7F";
+      REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+    END;
+
+
+%-------------------- PROPERTIES DU DATASET
+
+  STR_NUM        := BLS_ARR[BEG_STR + STRUCTURENUM];
+  MAS_NUM        := BLS_ARR[BEG_STR + MASTERSTRUCTURESN];
+  STR_REO        := BLS_ARR[BEG_STR + REORGINFONODE];
+  STR_NEW        := BLS_ARR[BEG_STR + NEWSTRUCTURE    ] > 0;
+  STR_GENBYREORG := BLS_ARR[BEG_STR + REORGGENFROMDS] > 0;
+  IF BLS_ARR[BEG_STR + RESTARTDATASETF] > 0 THEN
+    S03 := HEAD(TAIL(STRING(DAT_PKNAME,18)," "),VALCHR); % PACKNAME
+
+%-------------------- MISE EN TABLE
+
+  IF MAX(STR_NUM,MAS_NUM) GEQ MAXROW THEN
+    BEGIN
+      MAXROW := MAX(STR_NUM,MAS_NUM) + 1;
+      RESIZE(STRARY,MAXROW,RETAIN);
+    END;
+
+  STRN(STR_NUM) := STR_NUM;
+  MASN(STR_NUM) := MAS_NUM;
+  REON(STR_NUM) := STR_REO;
+  IF STR_NEW THEN NEWF(STR_NUM) := 1;
+  IF MAS_NUM = 1 THEN
+    STRT(STR_NUM) := 0
+    ELSE
+    STRT(STR_NUM) := 1;
+  REPLACE NAMS(STR_NUM) BY DAT_DSNAME FOR 18;
+% WRITE(ECRAN,<"DS : ",A18,5I5>,NAMS(STR_NUM)
+%                              ,STRN(STR_NUM)
+%                              ,MASN(STR_NUM)
+%                              ,REON(STR_NUM)
+%                              ,NEWF(STR_NUM)
+%                              ,STRT(STR_NUM));
+
+  IF MAS_NUM > 1 THEN
+    BEGIN
+      MAXCOL := STRARY[MAS_NUM,1] + 6;
+      RESIZE(STRARY[MAS_NUM,*],MAXCOL,RETAIN);
+      STRARY[MAS_NUM,1]      := * + 1;
+      STRARY[MAS_NUM,MAXCOL - 1] := STR_NUM;
+    END;
+
+%--------------------
+
+  IF STR_REO > 0 THEN
+    UPDCONTROL := FALSE;
+
+END OF FIND_DATASET_PROP;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               RECHERCHE DES PROPERTIES DES SETS                      %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE FIND_SET_PROP;
+%------------------------
+
+BEGIN
+  INTEGER L1,L2;
+
+%-------------------- NOM DU SET
+
+  L1 := BLS_ARR[BEG_STR + IDENTIFIERSZ];
+  L2 := 18 - L1;
+  REPLACE SET_IXNAME BY
+  POINTER(BLS_ARR[BEG_STR + WORDONE]) + 1 FOR L1," " FOR L2;
+
+%-------------------- NOM DU PACK DU SET
+
+  WRD_ADD := BLS_ARR[BEG_STR + PACKNAMETEXT] + BLS_TXT;
+  PA      := POINTER(BLS_ARR[WRD_ADD]);
+  PB      := SET_PKNAME;
+  N       := 18;
+
+  REPLACE PB BY " " FOR 18;
+
+  WHILE PA NEQ "." DO
+    BEGIN
+      SCAN PA:PA WHILE = 48 "7F";
+      REPLACE PB:PB BY PA:PA FOR N:N UNTIL IN QUOPNT;
+    END;
+
+%-------------------- PROPERTIES DU SET
+
+  STR_NUM        := BLS_ARR[BEG_STR + STRUCTURENUM];
+  MAS_NUM        := BLS_ARR[BEG_STR + MASTERSTRUCTURESN];
+  STR_REO        := BLS_ARR[BEG_STR + REORGINFONODE];
+  STR_NEW        := BLS_ARR[BEG_STR + NEWSTRUCTURE    ] > 0;
+  STR_GENBYREORG := BLS_ARR[BEG_STR + REORGGENFROMDS] > 0;
+
+%-------------------- MISE EN TABLE
+
+  IF MAX(STR_NUM,MAS_NUM) GEQ MAXROW THEN
+    BEGIN
+      MAXROW := MAX(STR_NUM,MAS_NUM) + 1;
+      RESIZE(STRARY,MAXROW,RETAIN);
+    END;
+
+  STRN(STR_NUM) := STR_NUM;
+  MASN(STR_NUM) := MAS_NUM;
+  REON(STR_NUM) := STR_REO;
+  IF STR_NEW THEN
+  BEGIN
+    NEWF(STR_NUM) := 1;
+    BAS_REORGREQ := TRUE;
+  END;
+  STRT(STR_NUM) := 1;
+  REPLACE NAMS(STR_NUM) BY SET_IXNAME FOR 18;
+% WRITE(ECRAN,<" S : ",A18,5I5>,NAMS(STR_NUM)
+%                              ,STRN(STR_NUM)
+%                              ,MASN(STR_NUM)
+%                              ,REON(STR_NUM)
+%                              ,NEWF(STR_NUM)
+%                              ,STRT(STR_NUM));
+
+  IF MAS_NUM > 1 THEN
+    BEGIN
+      MAXCOL := STRARY[MAS_NUM,1] + 6;
+      RESIZE(STRARY[MAS_NUM,*],MAXCOL,RETAIN);
+      STRARY[MAS_NUM,1]      := * + 1;
+      STRARY[MAS_NUM,MAXCOL - 1] := STR_NUM;
+    END;
+
+%--------------------
+
+END OF FIND_SET_PROP;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               RECHERCHE DU NIVEAU SOFTWARE DES ACCESSROUTINES        %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE FIND_LEVEL;
+%---------------------
+
+BEGIN
+
+  BOOLEAN OK;
+
+  PA := BAS_ACRNAME[0];
+  PB := WORKARRAY[0];
+  S  := STRING(BAS_ACRNAME[0],1);
+  N  := 60;
+  IF S = "*" THEN
+    PA := * + 1
+    ELSE
+  IF S = "(" THEN
+    BEGIN
+      SCAN PA:PA FOR N:N UNTIL IN LPRPST;
+      PA := * + 1;
+      N  := * - 1;
+    END;
+  SCAN PA:PA FOR N:N UNTIL = "/";
+  IF N > 4 THEN
+    BEGIN
+      PA := * + 1;
+      IF PA = "DMS" FOR 3 THEN
+        BEGIN
+          REPLACE PB:PB BY PA:PA UNTIL = "/";
+          N  := OFFSET(PB);
+          S11 := STRING(WORKARRAY[0],N);
+        END;
+    END;
+
+END OF FIND_LEVEL;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               UPDATE DE LA CONTROL FILE                              %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE UPDATE_CONTROL;
+%-------------------------
+
+BEGIN
+
+  BOOLEAN OK;
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%   UPDATE  CONTROL  FILE    %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+
+  WWFS("STEP31");
+  WWFL(" RUN SYSTEM/" !! S11 !! "/DMCONTROL");
+  WWFL("   (" !! """ !! "DB=" !! SDBNAME !! " ON " !! S07 !!
+       "  UPDATE" !! """ !! ") [TT1];");
+  WWFL(" ");
+  WWFL(" CPCHECK (""" STEP31 """, TT1); ");
+  WWFL(" ");
+  WWFL(" IF BB1 THEN GO TO STEP31;");
+  WWFL(" ");
+END OF UPDATE_CONTROL;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               INITIALISATION DES STRUCTURES                          %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE UPDATE_INITSTR;
+%-------------------------
+
+BEGIN
+
+  INTEGER LOOP;
+  BOOLEAN FIRST;
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%   INITIALIZE  STRUCTURES   %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+
+  WWFS(S25);
+  WWFL(" RUN SYSTEM/" !! S11 !! "/DMUTILITY");
+  WWFL("   (" !! """ !! "DB=" !! SDBNAME !! " ON " !! S05 !!
+           " INITIALIZE" !! """ !! "&");
+  FIRST := TRUE;
+  FOR LOOP := 0 STEP 1 UNTIL 20 DO
+    BEGIN
+      IF PA + (LOOP * 18) = " " FOR 18 THEN ELSE
+        BEGIN
+          S := HEAD(TAIL(STRING(PA + (LOOP * 18),18)," "),VALCHRS);
+          IF LENGTH(S) > 0 THEN
+            BEGIN
+              IF FIRST THEN
+                BEGIN
+                  FIRST := FALSE;
+                  S19 := " " !! S;
+                END
+                ELSE
+                  S19 := "," !! S;
+              WWFL("   " !! """ !! S19 !! """ !! "&");
+            END;
+        END;
+    END;
+  WWFL("   " !! """ !! """ !! ") [TT1];");
+  WWFL(" ");
+
+  WWFL(" DMCHECK (""" " !! S25 !! " """, TT1); ");
+  WWFL(" ");
+
+  WWFL(" IF BB1 THEN GO TO " !! S25 !! ";");
+  WWFL(" ");
+
+END OF UPDATE_INITSTR;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               SAUVETAGE DE LA BASE                                   %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE UPDATE_SAVEDB;
+%-----------------------
+
+BEGIN
+
+  BOOLEAN OK;
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%       SAVE DATABASE        %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+  WWFS(S25);
+
+  WWFL(" RUN SYSTEM/" !! S11 !! "/DMUTILITY");
+  WWFL("   (" !! """ !!
+       " DB = " !! SDBNAME !! " ON " !! S05 !! """ !! "&");
+  IF USEREORGDB THEN
+  BEGIN
+     WWFL("    " !! """ !!
+          " OPTIONS (WORKERS= " !! """ !! "& " !! SDUW !! " &" !! """ !!
+          " ," !! " NOCOMPARE)" !! """ !! "&");
+     END
+  ELSE
+  BEGIN
+     WWFL("    " !! """ !!
+          " OPTIONS (WORKERS= " !! """ !! "& " !! SDUW !! " &" !! """ !!
+          " ," !! " FORWARD COMPARE)" !! """ !! "&");
+  END;
+  WWFL("    " !! """ !! S36 !! " DUMP " !! """ !! "&");
+  IF COPS = 2 THEN
+  BEGIN
+      IF LENGTH(S24) = 0 THEN
+      BEGIN
+          WWFL("    " !! """ !! " = TO " !! S33 !! " & ");
+          WWFL("    " !! """ !! " (TAPES= " !! """ !! "& " !!
+               SDUT !! " &");
+          WWFL("    " !! """ !! " = TO " !! S34 !! " & ");
+          WWFL("    " !! """ !! " (TAPES= " !! """ !! "& " !!
+               SDUT !! ")" !! """ !! ") [TT1];");
+      END
+      ELSE
+      BEGIN
+          WWFL("    " !! """ !! " = TO " !! S33 !! " & ");
+          WWFL("    " !! """ !! " (TAPES= " !! """ !! "& " !!
+               SDUT !! " &");
+          WWFL("    " !! """ !! " ,BLOCKSIZE=" !! S24 !! ") ;" !!
+               """ !! "&");
+          WWFL("    " !! """ !! " = TO " !! S34 !! " & ");
+          WWFL("    " !! """ !! " (TAPES= " !! """ !! "& " !!
+               SDUT !! " &");
+          WWFL("    " !! """ !! " ,BLOCKSIZE=" !! S24 !! ")" !!
+               """ !! ") [TT1];");
+      END;
+  END
+  ELSE
+  BEGIN
+      IF LENGTH(S24) = 0 THEN
+      BEGIN
+          WWFL("    " !! """ !! " = TO " !! S33 !! " & ");
+          WWFL("    " !! """ !! " (TAPES= " !! """ !! "& " !!
+               SDUT !! ")" !! """ !! ") [TT1];");
+      END
+      ELSE
+      BEGIN
+          WWFL("    " !! """ !! " = TO " !! S33 !! " & ");
+          WWFL("    " !! """ !! " (TAPES= " !! """ !! "& " !!
+               SDUT !! " &");
+          WWFL("    " !! """ !! " ,BLOCKSIZE=" !! S24 !! ")" !!
+               """ !! ") [TT1];");
+      END;
+  END;
+  WWFL(" ");
+
+  WWFL(" DMCHECK (""" " !! S25 !! " """, TT1); ");
+  WWFL(" ");
+
+  WWFL(" IF BB1 THEN GO TO " !! S25 !! ";");
+  WWFL(" ");
+
+% WWFL(" RUN *DBA/PO/AUDITNO ON " !! S07);
+% WWFL("   (" !! """ !! S10 !! SDBNAME !!
+%      "/CONTROL ON " !! S05 !! """ !! ");");
+% WWFL(" ");
+
+END OF UPDATE_SAVEDB;
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               CREATION DU HEADER DU JOB D UPDATE                     %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE UPDATE_HEADER(ItsAReorg);
+%------------------------
+ Value ItsAReorg;
+ Boolean ItsAReorg;
+
+BEGIN
+
+  INTEGER LOOP;
+
+  WWFL("BEGIN JOB DBA/WF/R01/" !! S02 !!
+       "(STRING SS2 OPTIONAL DEFAULT = """""",");
+  WWFL("                  INTEGER IWORKERS OPTIONAL DEFAULT = 1,");
+  WWFL("                  INTEGER ITAPES OPTIONAL DEFAULT = 1);");
+  WWFL("%%%%%%%%% DBA/WF/R01/" !! S02 !! "/" !! S17
+            !! "   " !! SUSEREORGDB);
+%  WWFL("USER       = DBA/DBA;");
+  WWFL("CHARGECODE = " !! S37 !! ";");
+
+  FOR LOOP := 0 STEP 1 UNTIL 3 DO
+    BEGIN
+      WWFL("%");
+    END;
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(23) !! "D E C L A R A T I O N S" !! B(24) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" ");
+
+  WWFL(" TASK    TT1;");
+  WWFL(" ");
+
+  WWFL(" BOOLEAN BB1,");
+  WWFL("         BB2,");
+  WWFL("         BHOSTBETA,");
+  WWFL("         BHOSTIOTA;");
+  WWFL(" ");
+
+  WWFL(" STRING  MSG,  ");
+  WWFL("         SS3,  ");
+  WWFL("         SS4,  ");
+  WWFL("         TEMP, ");
+  WWFL("         " !! S35 !! ", ");
+  WWFL("         SMLT, ");
+  WWFL("         SMLS, ");
+  WWFL("         SMLM, ");
+  WWFL("         CRLFV,");
+  WWFL("         SBASE,");
+  WWFL("         SUSER,");
+  WWFL("         SCTRL,");
+  WWFL("         SLVL,");
+  WWFL("         RESPONSE; ");
+  WWFL(" ");
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(24) !! "S U B R O U T I N E S" !! B(25) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+
+  WWFL(" ");
+  WWFL(" SUBROUTINE STRIPBLANKS(STRING INPUT);  ");
+  WWFL(" ");
+
+  WWFL(" BEGIN ");
+  WWFL(" ");
+  WWFL("   INTEGER I, LEN;");
+  WWFL("   STRING  S;");
+  WWFL("   INPUT := TAIL(INPUT,""" """); ");
+  WWFL("   INPUT := HEAD(INPUT,NOT """ """); ");
+  WWFL("   LEN := LENGTH(INPUT);");
+  WWFL("   WHILE I < LEN DO");
+  WWFL("     BEGIN");
+  WWFL("       CASE TAKE(DROP(INPUT,I),1) OF");
+  WWFL("         BEGIN");
+  WWFL("           ("""a""") : S := S & """A"""; " !!
+                  "("""b""") : S := S & """B""";");
+  WWFL("           ("""c""") : S := S & """C"""; " !!
+                  "("""d""") : S := S & """D""";");
+  WWFL("           ("""e""") : S := S & """E"""; " !!
+                  "("""f""") : S := S & """F""";");
+  WWFL("           ("""g""") : S := S & """G"""; " !!
+                  "("""h""") : S := S & """H""";");
+  WWFL("           ("""i""") : S := S & """I"""; " !!
+                  "("""j""") : S := S & """J""";");
+  WWFL("           ("""k""") : S := S & """K"""; " !!
+                  "("""l""") : S := S & """L""";");
+  WWFL("           ("""m""") : S := S & """M"""; " !!
+                  "("""n""") : S := S & """N""";");
+  WWFL("           ("""o""") : S := S & """O"""; " !!
+                  "("""p""") : S := S & """P""";");
+  WWFL("           ("""q""") : S := S & """Q"""; " !!
+                  "("""r""") : S := S & """R""";");
+  WWFL("           ("""s""") : S := S & """S"""; " !!
+                  "("""t""") : S := S & """T""";");
+  WWFL("           ("""u""") : S := S & """U"""; " !!
+                  "("""v""") : S := S & """V""";");
+  WWFL("           ("""w""") : S := S & """W"""; " !!
+                  "("""x""") : S := S & """X""";");
+  WWFL("           ("""y""") : S := S & """Y"""; " !!
+                  "("""z""") : S := S & """Z""";");
+  WWFL("           ELSE  : S := S & TAKE(DROP(INPUT,I),1);");
+  WWFL("         END;");
+  WWFL("       I := I + 1;");
+  WWFL("     END;");
+  WWFL("   INPUT := S;");
+  WWFL(" ");
+  WWFL(" END; ");
+  WWFL(" ");
+
+  WWFL("%" !! T(70) !! "%");
+  WWFL(" ");
+  WWFL(" SUBROUTINE AXCHECK ( STRING STR );");
+  WWFL(" ");
+
+  WWFL(" BEGIN");
+  WWFL(" ");
+  WWFL("   DISPLAY ("""WFL " !! S02 !! "R01 00 ALARM 004 """ &");
+  WWFL("            """CHECK WFL CONTINUATION: """  &  ");
+  WWFL("             STR & """/" !! SDBNAME !! """"); ");
+  WWFL("   MSG := """WFL " !! S02 !! "R01 00 " !!
+       "OPERA 014 """ & STR & """/" !! SDBNAME !! """" &");
+  WWFL("          """ : RESTART JOB ? (Y/N)""";        ");
+  WWFL(" ");
+
+  WWFL("   DO                                          ");
+  WWFL("     BEGIN                                     ");
+  WWFL("       RESPONSE := ACCEPT(MSG);                ");
+  WWFL("       STRIPBLANKS(RESPONSE);                  ");
+  WWFL("     END                                       ");
+  WWFL("   UNTIL                                       ");
+  WWFL("   RESPONSE = """Y""" OR                       ");
+  WWFL("   RESPONSE = """N""";                         ");
+  WWFL(" ");
+
+  WWFL("   IF RESPONSE EQL """N"""  THEN               ");
+  WWFL("     BEGIN                                     ");
+  WWFL("       MSG := """WFL " !! S02 !! "R01 00 " !!
+       "INFOR 002 JOB NOT EXECUTED :""" &              ");
+  WWFL("              """ABORT AT """ & " !!
+       "STR & """/" !! SDBNAME !! """";                    ");
+  WWFL("       ABORT(MSG);                             ");
+  WWFL("     END;                                      ");
+
+  WWFL(" ");
+
+  WWFL(" END;");
+  WWFL(" ");
+
+  WWFL("%" !! T(70) !! "%");
+  WWFL(" ");
+  WWFL(" SUBROUTINE DMCHECK ( STRING STR, TASK TSK );");
+  WWFL(" ");
+
+  WWFL(" BEGIN");
+  WWFL(" ");
+  WWFL("  IF TSK(VALUE) = 1 THEN                          ");
+  WWFL("    GO TO EXIT;                                   ");
+  WWFL(" ");
+
+  WWFL("  IF TSK(VALUE) = 2 THEN                          ");
+  WWFL("    BEGIN                                         ");
+  WWFL("      DISPLAY ("""WFL " !! S02 !! "R01 00 ALARM 001 """ &");
+  WWFL("               """CHECK WARNING DMUTILITY """  &  ");
+  WWFL("                STR & """/" !! SDBNAME !! """");      ");
+  WWFL("      GO TO EXIT;                                 ");
+  WWFL("    END;                                          ");
+  WWFL(" ");
+
+  WWFL("  IF TSK(VALUE) = 0 THEN                          ");
+  WWFL("    MSG := """ERROR""";                           ");
+  WWFL(" ");
+
+  WWFL("  IF TSK ISNT COMPLETEDOK THEN                    ");
+  WWFL("    MSG := """DS-ED""";                           ");
+  WWFL(" ");
+
+  WWFL("  DISPLAY ("""WFL " !! S02 !! "R01 00 ALARM 003 " !!
+       "FAULT IN DMUTILITY""" &                           ");
+  WWFL("           """ // CAUSE : """ & MSG);             ");
+  WWFL("  MSG := """WFL " !! S02 !! "R01 00 " !!
+       "OPERA 014 """ & STR & """/" !! SDBNAME !! """" &      ");
+  WWFL("         """ : RESTART TASK ? (Y/N)""";           ");
+  WWFL(" ");
+
+
+  WWFL("   DO                                          ");
+  WWFL("     BEGIN                                     ");
+  WWFL("       RESPONSE := ACCEPT(MSG);                ");
+  WWFL("       STRIPBLANKS(RESPONSE);                  ");
+  WWFL("     END                                       ");
+  WWFL("   UNTIL                                       ");
+  WWFL("   RESPONSE = """Y""" OR                       ");
+  WWFL("   RESPONSE = """N""";                         ");
+  WWFL(" ");
+
+  WWFL("   IF RESPONSE EQL """N"""  THEN               ");
+  WWFL("     BEGIN                                     ");
+  WWFL("       MSG := """WFL " !! S02 !! "R01 00 " !!
+       "INFOR 002 JOB NOT EXECUTED :""" &              ");
+  WWFL("              """ABORT AT """ & " !!
+       "STR & """/" !! SDBNAME !! """";                    ");
+  WWFL("       ABORT(MSG);                             ");
+  WWFL("     END                                       ");
+  WWFL("     ELSE                                      ");
+  WWFL("       BB1 := TRUE;                            ");
+
+  WWFL(" ");
+  WWFL(" EXIT :");
+  WWFL(" ");
+
+  WWFL(" END;");
+  WWFL(" ");
+
+  WWFL("%" !! T(70) !! "%");
+  WWFL(" ");
+  WWFL(" SUBROUTINE SRCHECK ( STRING STR, TASK TSK );");
+  WWFL(" ");
+
+  WWFL(" BEGIN");
+  WWFL(" ");
+  WWFL("  IF NOT ( TSK IS COMPLETEDOK ) THEN");
+  WWFL("    BEGIN");
+  WWFL("      DISPLAY ("""WFL " !! S02 !! "R01 00 ALARM 004 """ &");
+  WWFL("               """CHECK WFL CONTINUATION: """  &  ");
+  WWFL("                STR & """/" !! SDBNAME !! """");   ");
+  WWFL("      MSG := """WFL " !! S02 !! "R01 00 " !!
+       "OPERA 014 """ & STR & """/" !! SDBNAME !! """" &   ");
+  WWFL("             """ : RESTART TASK ? (Y/N)""";    ");
+  WWFL(" ");
+
+  WWFL("      DO                                       ");
+  WWFL("        BEGIN                                  ");
+  WWFL("          RESPONSE := ACCEPT(MSG);             ");
+  WWFL("          STRIPBLANKS(RESPONSE);               ");
+  WWFL("        END                                    ");
+  WWFL("      UNTIL                                    ");
+  WWFL("      RESPONSE = """Y""" OR                    ");
+  WWFL("      RESPONSE = """N""";                      ");
+  WWFL(" ");
+
+  WWFL("      IF RESPONSE EQL """N"""  THEN            ");
+  WWFL("        BEGIN                                  ");
+  WWFL("          MSG := """WFL " !! S02 !! "R01 00 " !!
+       "INFOR 002 JOB NOT EXECUTED :""" &              ");
+  WWFL("                 """ABORT AT """ & " !!
+       "STR & """/" !! SDBNAME !! """";                    ");
+  WWFL("          ABORT(MSG);                          ");
+  WWFL("        END                                    ");
+  WWFL("        ELSE                                   ");
+  WWFL("        BB1 := TRUE;                           ");
+
+  WWFL("    END;");
+  WWFL(" ");
+
+  WWFL(" END;");
+  WWFL(" ");
+
+  WWFL("%" !! T(70) !! "%");
+  WWFL(" ");
+  WWFL(" SUBROUTINE CPCHECK ( STRING STR, TASK TSK );");
+  WWFL(" ");
+
+  WWFL(" BEGIN");
+  WWFL(" ");
+  WWFL("  IF ( TSK ISNT COMPLETEDOK ) OR");
+  WWFL("     ( TSK(VALUE) = 1 ) THEN");
+  WWFL("    BEGIN");
+  WWFL("      DISPLAY ("""WFL " !! S02 !! "R01 00 ALARM 005 """ &");
+  WWFL("               """PROBLEM DURING COPY""");        ");
+  WWFL("      MSG := """WFL " !! S02 !! "R01 00 " !!
+       "OPERA 018 """ & STR & """/" !! SDBNAME !! """" &");
+  WWFL("             """ : RESTART OR CONTINUE ? (Y/C/N)""";");
+  WWFL(" ");
+
+  WWFL("      DO                                       ");
+  WWFL("        BEGIN                                  ");
+  WWFL("          RESPONSE := ACCEPT(MSG);             ");
+  WWFL("          STRIPBLANKS(RESPONSE);               ");
+  WWFL("        END                                    ");
+  WWFL("      UNTIL                                    ");
+  WWFL("      RESPONSE = """Y""" OR");
+  WWFL("      RESPONSE = """C""" OR");
+  WWFL("      RESPONSE = """N""";");
+  WWFL(" ");
+
+  WWFL("      IF RESPONSE EQL """N"""  THEN            ");
+  WWFL("        BEGIN                                  ");
+  WWFL("          MSG := """WFL " !! S02 !! "R01 00 " !!
+       "INFOR 002 JOB NOT EXECUTED :""" &              ");
+  WWFL("                 """ABORT AT """ & " !!
+       "STR & """/" !! SDBNAME !! """";                    ");
+  WWFL("          ABORT(MSG);                          ");
+  WWFL("        END                                    ");
+  WWFL("        ELSE                                   ");
+  WWFL("      IF RESPONSE EQL """Y"""  THEN            ");
+  WWFL("        BB1 := TRUE;                           ");
+
+  WWFL("    END;");
+  WWFL(" ");
+
+  WWFL(" END;");
+  WWFL(" ");
+
+  WWFL("%" !! T(70) !! "%");
+  WWFL(" ");
+  WWFL(" SUBROUTINE REOCHECK ( STRING STR, TASK TSK );");
+  WWFL(" ");
+
+  WWFL(" BEGIN");
+  WWFL(" ");
+  WWFL("  IF NOT ( TSK IS COMPLETEDOK ) THEN");
+  WWFL("    ABORT ("""WFL " !! S02 !! "R01 00 INFOR 002 """ &");
+  WWFL("           """REORGANIZATION FAILED : """ &");
+  WWFL("           """ABORT AT """ & " !!
+       "STR & """/" !! SDBNAME !! """");                   ");
+  WWFL(" ");
+  WWFL("  IF TSK(VALUE) = 2 THEN");
+  WWFL("    BEGIN");
+  WWFL("      DISPLAY ("""WFL " !! S02 !! "R01 00 ALARM 004 """ &");
+  WWFL("               """PROBLEM DURING REORG.""");        ");
+  WWFL("      MSG := """WFL " !! S02 !! "R01 00 " !!
+       "OPERA 018 """ & STR & """/" !! SDBNAME !! """" &");
+  WWFL("             """ : AX TO CONTINUE ? (Y/N)""";");
+  WWFL(" ");
+
+  WWFL("      DO                                       ");
+  WWFL("        BEGIN                                  ");
+  WWFL("          RESPONSE := ACCEPT(MSG);             ");
+  WWFL("          STRIPBLANKS(RESPONSE);               ");
+  WWFL("        END                                    ");
+  WWFL("      UNTIL                                    ");
+  WWFL("      RESPONSE = """Y""" OR");
+  WWFL("      RESPONSE = """C""" OR");
+  WWFL("      RESPONSE = """N""";");
+  WWFL(" ");
+
+  WWFL("      IF RESPONSE EQL """N"""  THEN            ");
+  WWFL("        BEGIN                                  ");
+  WWFL("          MSG := """WFL " !! S02 !! "R01 00 " !!
+       "INFOR 002 JOB NOT EXECUTED :""" &              ");
+  WWFL("                 """ABORT AT """ & " !!
+       "STR & """/" !! SDBNAME !! """";                    ");
+  WWFL("          ABORT(MSG);                          ");
+  WWFL("        END                                    ");
+  WWFL("        ELSE                                   ");
+  WWFL("        BB2 := TRUE;                           ");
+
+  WWFL("    END;");
+  WWFL(" ");
+
+  WWFL(" END;");
+  WWFL(" ");
+
+  WWFL("%" !! T(70) !! "%");
+  WWFL(" ");
+  WWFL(" SUBROUTINE SENDMAIL ( STRING SML );");
+  WWFL(" ");
+
+  WWFL(" BEGIN");
+  WWFL(" ");
+  WWFL("   SMLT := TIMEDATE(DISPLAY);");
+  WWFL(" ");
+  WWFL("   CASE TAKE(SML,1) OF");
+  WWFL("    BEGIN                                         ");
+  WWFL("      ("""0""") : BEGIN");
+  WWFL("                CRLFV := """0D25""";");
+  WWFL("                RUN DBA/PO/811(CRLFV REFERENCE);");
+  WWFL("                SMLS := """Reorganisation de la base " !!
+                                SDBNAME !! "";");
+  WWFL("                SMLM := """SYSTEME : """"
+                                " & MYJOB(HOSTNAME) & CRLFV & ");
+  WWFL("                         String(MyJob(MIXNUMBER),5) & ");
+  WWFL("                        """ BOJ : """ & SMLT & CRLFV;");
+  WWFL("              END;");
+  WWFL("      ("""1""") : SMLM := SMLM & """     """ &");
+  WWFL("                        """ BOT : """ & SMLT & CRLFV;");
+  WWFL("      ("""2""") : SMLM := SMLM & String(TT1(MIXNUMBER),5) &");
+  WWFL("                        """ EOT : """ & SMLT & CRLFV;");
+  WWFL("      ("""3""") : SMLM := SMLM & String(MyJob(MIXNUMBER),5) &");
+  WWFL("                        """ EOJ ** ERROR ** : """ & SMLT;");
+  WWFL("      ("""4""") : SMLM := SMLM & String(MyJob(MIXNUMBER),5) &");
+  WWFL("                        """ EOJ : """ & SMLT;");
+  WWFL("      ELSE  : RUN DBA/PO/100 (SMLS, SMLM);");
+  WWFL("    END;                                          ");
+  WWFL(" ");
+
+  WWFL(" END;");
+  WWFL(" ");
+
+  WWFL("%" !! T(70) !! "%");
+  WWFL(" ");
+  WWFL(" SUBROUTINE SUBLABELTAPE ( STRING LABELTYPE, STRING SS4 );");
+  WWFL(" ");
+
+  WWFL(" BEGIN");
+  WWFL(" ");
+  WWFL("   CASE TAKE(DROP(SS4,4),2) OF                    ");
+  WWFL("    BEGIN                                         ");
+  WWFL("      ("""01""","""02""","""03""","""04"""," !!
+              """"05""","""06""","""07""","""08"""," !!
+              """"09""") :                                ");
+  WWFL("                   " !! S35 !! " := TAKE(DROP(SS4,5),1);   ");
+  WWFL("      ("""10""") : " !! S35 !! " := """A""";               ");
+  WWFL("      ("""11""") : " !! S35 !! " := """B""";               ");
+  WWFL("      ("""12""") : " !! S35 !! " := """C""";               ");
+  WWFL("      ELSE       : " !! S35 !! " := """X""";               ");
+  WWFL("    END;                                          ");
+  WWFL(" ");
+
+  WWFL("   CASE LABELTYPE OF                              ");
+  WWFL("    BEGIN                                         ");
+  WWFL("      ("""YYM""") : " !! S35 !!
+       " := TAKE(DROP(SS4,2),2) & " !! S35 !! ";");
+  WWFL("      ("""MDD""") : " !! S35 !!
+       " := " !! S35 !! " & TAKE(DROP(SS4,6),2);");
+  WWFL("      ELSE        : " !! S35 !!
+       " := " !! S35 !! " & """XX"""       ");
+  WWFL("    END;                                          ");
+  WWFL(" ");
+
+  WWFL(" END;");
+  WWFL(" ");
+
+  WWFL("%" !! T(70) !! "%");
+  WWFL(" ");
+  WWFL(" SUBROUTINE CHECKDBINFO; ");
+  WWFL(" ");
+  WWFL("    BEGIN ");
+  WWFL(" ");
+  WWFL(" CHECKINFO: ");
+  WWFL(" ");
+  WWFL("   INITIALIZE (TT1);");
+  WWFL("   BB1 := FALSE;");
+  WWFL(" ");
+  WWFL("   RUN (BBLP)DBA/PO/801 (SBASE REFERENCE,");
+  WWFL("                         SUSER REFERENCE,");
+  WWFL("                         SCTRL REFERENCE,");
+  WWFL("                         SLVL REFERENCE)[TT1];");
+  WWFL(" ");
+  WWFL("   SRCHECK (""" CHECKINFO """, TT1);");
+  WWFL(" ");
+  WWFL("   IF BB1 THEN GO TO CHECKINFO;");
+  WWFL(" ");
+  WWFL(" END;");
+  WWFL(" ");
+
+  WWFL("%" !! T(70) !! "%");
+  WWFL(" ");
+  WWFL(" SUBROUTINE CHECKDBSTATUS; ");
+  WWFL(" ");
+  WWFL("    BEGIN ");
+  WWFL(" CHECKDBOK: ");
+  WWFL(" ");
+  WWFL("    TT1( STATUS = NEVERUSED ); ");
+  WWFL(" ");
+  WWFL("    RUN (BBLP)DBA/PO/602  ON BBLPR1 [TT1]; % LINC14/CFC ");
+  WWFL("    FILE CONTROL = " !! SDBNAME !! "/CONTROL ON "
+          !! S05 !! ";");
+  WWFL(" ");
+
+  WWFL("    IF TT1(SW1) THEN  % DATABASE IN USE CONTROL FILE LOCK ");
+  WWFL("       BEGIN    ");
+  WWFL("       TEMP := """WFL " !! S02 !! "R01 00 OPERA 015 " !!
+                        SDBNAME !! " """ &");
+  WWFL("               """IN USE --- WHEN DB CLOSED """ &");
+  WWFL("               """ENTER <MIX> OK""";");
+  WWFL("       WAIT(TEMP,OK);   ");
+  WWFL("       GO TO CHECKDBOK; ");
+  WWFL("       END;             ");
+  WWFL("    IF TT1(SW2) THEN   % DATABASE LOCK WORD SET  ");
+  WWFL("       BEGIN                                   ");
+  WWFL("       TEMP := """WFL " !! S02 !! "R01 00 OPERA 016 " !!
+                        SDBNAME !! " """ &");
+  WWFL("               """WORD LOCKED -- WHEN RUN COMPLETED """ &");
+  WWFL("               """ENTER <MIX> OK""";");
+  WWFL("       WAIT(TEMP,OK);   ");
+  WWFL("       GO TO CHECKDBOK; ");
+  WWFL("       END;             ");
+  WWFL("    IF TT1(SW3) THEN   % DATABASE NEEDS RECOVERY ");
+  WWFL("       BEGIN                                   ");
+  WWFL("       TEMP := """WFL " !! S02 !! "R01 00 OPERA 017 " !!
+                        SDBNAME !! " """ &");
+  WWFL("               """NEEDS RECOVERY -- WHEN COMPLETED """ &");
+  WWFL("               """ENTER <MIX> OK""";");
+  WWFL("       WAIT(TEMP,OK);   ");
+  WWFL("       GO TO CHECKDBOK; ");
+  WWFL("       END;             ");
+  WWFL("    IF TT1 ISNT COMPLETEDOK THEN ");
+  WWFL("       DISPLAY ("""WFL " !! S02 !! "R01 00 OPERA 018 " !!
+                        SDBNAME !! " """ &");
+  WWFL("                """DATABASE CHECK PROGRAM FAILED"""); ");
+  WWFL(" END;");
+  WWFL(" ");
+
+  WWFL("%" !! T(70) !! "%");
+  WWFL(" ");
+  WWFL(" SUBROUTINE CHECKHOST;  ");
+  WWFL(" ");
+
+  WWFL(" BEGIN ");
+  WWFL(" ");
+
+  WWFL("   STRING S;                               ");
+  WWFL("   S := MYSELF(HOSTNAME);                  ");
+  WWFL("   BHOSTBETA := FALSE;                     ");
+  WWFL("   BHOSTIOTA := FALSE;                     ");
+  WWFL("   CASE S OF                               ");
+  WWFL("     BEGIN                                 ");
+  WWFL("       ("""""ABRU2K03"""""    ,                    ");
+  WWFL("        """""ABRU2K14"""""    ,                    ");
+  WWFL("        """""H03"""""         ,                    ");
+  WWFL("        """""H14""""")        : BHOSTBETA := TRUE; ");
+  WWFL("       ("""""ABRU0120""""")   : BHOSTIOTA := TRUE; ");
+  WWFL("       ELSE           : BHOSTBETA := FALSE;");
+  WWFL("     END;                                  ");
+
+  WWFL(" END;");
+  WWFL(" ");
+
+  WWFL("%" !! T(70) !! "%");
+  WWFL(" ");
+
+  If ItsAReorg then
+  Begin
+    WWFL("SubRoutine CopyReorgReports(String DBName,"
+                                     "String StatsFamily);");
+    WWFL("Begin");
+    WWFL("  String");
+    WWFL("    Statement,");
+    WWFL("    ReorgReportsJob,");
+    WWFL("    JobSummaryName;");
+    WWFL(" ");
+
+    WWFL("  JobSummaryName:="""REORGSUMMARY/""" & DBName & """/""" & ");
+    WWFL("         TimeDate(YYYYMMDD) & """/""" & TimeDate(HHMMSS);");
+    WWFL("  MyJob(JobSummaryTitle=#(JobSummaryName "
+                                     "& """ ON """ & StatsFamily));");
+    WWFL(" ");
+
+    WWFL("  ReorgReportsJob:="""DBA/WF/R01/""" & "
+                                  "DBName & """/REORGREPORTS""";");
+    WWFL("  Statement:="""CAT JOB(KIND=READER) "
+                          "GIVING """ & ReorgReportsJob & ");
+    WWFL("    """(KIND=DISK,MAXRECSIZE=15,BLOCKSIZE=450,"
+                        "FILEKIND=JOBSYMBOL)""";");
+    WWFL("  Run *System/DumpAll(Statement);");
+    WWFL("Data JOB");
+    WWFL("Begin Job DBA/WF/R01/REORGREPORTS(String DBName,");
+    WWFL("                                  String JobSummaryName,");
+    WWFL("                                  String StatsFamily);");
+    WWFL("Name=DBA/WF/R01/#DBName/REORGREPORTS;");
+    WWFL("JobSummary=SUPPRESSED;");
+    WWFL("Task T;");
+    WWFL("Copy");
+    WWFL("  #JobSummaryName AS DBA/FP/#(MyJob(HOSTNAME))/");
+    WWFL("               #JobSummaryName From #StatsFamily(Pack),");
+    WWFL("  REORGSTATS/#DBName/= as DBA/FP/#(MyJob(HOSTNAME))/");
+    WWFL("               REORGSTATS/#DBName/= From #StatsFamily(Pack)");
+    WWFL("  To BBLTS3(Pack,HostName=ABRU0111)[T];");
+    WWFL("If (T(TASKVALUE) = 0) then");
+    WWFL("  Remove #JobSummaryName,");
+    WWFL("         REORGSTATS/#DBName/=");
+    WWFL("   From #StatsFamily;");
+    WWFL("Remove #(MyJob(NAME));");
+    WWFL("End Job;");
+    WWFL("?");
+    WWFL("Start #ReorgReportsJob(DBName,JobSummaryName,StatsFamily);");
+    WWFL("  StartTime=+00:01;");
+    WWFL("End CopyReorgReports;");
+    WWFL(" ");
+  End;
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(10)!!"JOB MUST BE UNDER USERCODE DBA" !! B(30) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" IF MYSELF(USERCODE) NEQ """DBA""" THEN ");
+  WWFL("BEGIN");
+  WWFL("MSG := """This job must be started under DBA user code. """ &");
+  WWFL("       """Type """"""<mix> OK """""" to terminate. """ ;");
+  WWFL("DISPLAY MSG;");
+  WWFL("WAIT (OK);" );
+  WWFL("GO TO ENDWFL;");
+  WWFL("END;");
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(30) !! "B  O  D Y" !! B(31) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" ");
+
+  WWFL(" SS3 := SS2;");
+  WWFL(" STRIPBLANKS (SS3); ");
+  WWFL(" SS4 := TIMEDATE(YYYYMMDD);");
+  WWFL(" SUBLABELTAPE("""" !! S13S !! """",SS4);");
+  WWFL(" SENDMAIL("""0""");");
+  WWFL(" ");
+
+  WWFL(" SBASE := """" !! SDBNAME !! """";");
+  IF NOT USEREORGDB THEN
+      WWFL(" CHECKDBINFO; ");
+  WWFL(" CHECKHOST;   ");
+  WWFL(" ");
+
+  WWFL(" CASE SS3 OF BEGIN ");
+  WWFL("  ("""""")       : GO TO BODY;  ");
+  SEQNBR := SEQNUM;
+  WWFL("  ELSE     :       ABORT (""" WRONG INPUT """ & SS2 ); ");
+  WWFL(" END; ");
+  WWFL(" ");
+
+  WWFL(" BODY:");
+  WWFL(" ");
+
+  IF NOT USEREORGDB THEN
+  BEGIN
+      WWFL(" CHECKDBSTATUS; ");
+  END;
+  WWFL(" ");
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(29) !! "S T E P   1" !! B(30) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" ");
+
+END OF UPDATE_HEADER;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               SAUVETAGE DES ANCIENS SOFTWARES                        %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE UPDATE_SAVESOFT;
+%--------------------------
+
+BEGIN
+
+  BOOLEAN OK;
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%      SAVE OLD SOFTWARE     %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+
+  WWFS("STEP12");
+
+  WWFL(" IF FILE");
+  WWFL("   *DMINTERPRETER/" !! SDBNAME !! " ON " !! S07);
+  WWFL("     IS RESIDENT THEN");
+  WWFL("       BEGIN");
+  WWFL("         COPY *DMINTERPRETER/" !! SDBNAME);
+  WWFL("           AS " !! S10 !! S31 !! S32 !!
+                      "/DMINTERPRETER/" !! S17);
+  WWFL("         FROM " !! S07 !! "(PACK)");
+  WWFL("           TO " !! S07 !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL("         CPCHECK (""" STEP12 """, TT1);");
+  WWFL(" ");
+  WWFL("         IF BB1 THEN GO TO STEP12;");
+  WWFL("       END;");
+  WWFL(" ");
+
+  WWFS("STEP13");
+
+  WWFL(" COPY *DESCRIPTION/" !! SDBNAME);
+
+  IF NEWDATABRIDGE THEN
+    BEGIN
+     WWFL("   AS " !! S10 !! S31 !! S32 !!
+          "/DESCRIPTION/" !! S17 !! ",");
+     WWFL("      *DESCRIPTION/" !! SDBNAME);
+     WWFL("   AS *" !! S29C !! "/DESCRIPTION/" !! SDBNAME);
+    END
+  ELSE
+    WWFL("   AS " !! S10 !! S31 !! S32 !!
+         "/DESCRIPTION/" !! S17);
+
+  WWFL(" FROM " !! S07 !! "(PACK)");
+  WWFL("   TO " !! S07 !! "(PACK) [TT1];");
+
+  IF USEREORGDB THEN
+  BEGIN
+      WWFL(" COPY *DESCRIPTION/" !! SDBNAME);
+      WWFL("         AS *DESCRIPTION/" !! SDBNAME !! "/" !! S29C);
+      WWFL("      ,*DESCRIPTION/" !! SDBNAME);
+      WWFL("         AS (DBA)DESCRIPTION/" !! SDBNAME !! "/" !! S29C);
+      WWFL(" FROM " !! S07 !! "(PACK)");
+      WWFL("   TO " !! S07 !! "(PACK) [TT1];");
+      WWFL(" ");
+  END;
+
+  WWFL(" CPCHECK (""" STEP13 """, TT1); ");
+  WWFL(" ");
+  WWFL(" IF BB1 THEN GO TO STEP13;");
+  WWFL(" ");
+
+  WWFS("STEP14");
+
+  WWFL(" IF FILE");
+  WWFL("   " !! S10 !! "RECONSTRUCT/" !! SDBNAME !!
+      " ON " !! S06);
+  WWFL("     IS RESIDENT THEN");
+  WWFL(" BEGIN");
+  WWFL("     COPY " !! S10 !! "RECONSTRUCT/" !! SDBNAME);
+  WWFL("       AS " !! S10 !! S31 !! S32 !!
+                 "/RECONSTRUCT/" !! S17);
+  WWFL("       FROM " !! S06  !! "(PACK)");
+  WWFL("       TO " !! S06  !! "(PACK) [TT1];");
+  WWFL(" ");
+
+  WWFL("     CPCHECK (""" STEP14 """, TT1); ");
+  WWFL(" ");
+
+  WWFL("     IF BB1 THEN GO TO STEP14;");
+  WWFL(" END;");
+  WWFL(" ");
+
+  WWFS("STEP15");
+
+  WWFL(" COPY " !! S10 !! "DMSUPPORT/" !! SDBNAME);
+
+  IF NEWDATABRIDGE THEN
+    BEGIN
+     WWFL("   AS " !! S10 !! S31 !! S32 !!
+          "/DMSUPPORT/" !! S17 !! ",");
+     WWFL("      " !! S10 !! "DMSUPPORT/" !! SDBNAME);
+     WWFL("   AS " !! S10 !! S29C !! "/DMSUPPORT/" !! SDBNAME);
+    END
+  ELSE
+    WWFL("   AS " !! S10 !! S31 !! S32 !!
+         "/DMSUPPORT/" !! S17);
+
+  WWFL(" FROM " !! S06  !! "(PACK)");
+  WWFL("   TO " !! S06  !! "(PACK) [TT1];");
+  WWFL(" ");
+
+  WWFL(" CPCHECK (""" STEP15 """, TT1); ");
+  WWFL(" ");
+
+  WWFL(" IF BB1 THEN GO TO STEP15;");
+  WWFL(" ");
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%     SAVE CONTROL FILE      %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+
+  WWFS("STEP16");
+
+  WWFL(" COPY " !! S10 !! SDBNAME !! "/CONTROL");
+  WWFL("   AS " !! S10 !! S31 !! S32 !! "/CONTROL/" !! S17);
+  WWFL(" FROM " !! S05 !! "(PACK)");
+  WWFL("   TO " !! S06 !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL(" CPCHECK (""" STEP16 """, TT1); ");
+  WWFL(" ");
+  WWFL(" IF BB1 THEN GO TO STEP16;");
+  WWFL(" ");
+
+  IF NEWDATABRIDGE THEN
+    BEGIN
+     WWFL(B(21) !! C(30));
+     WWFL(B(21) !! "%" !! B(28) !! "%");
+     WWFL("%" !! T(20) !! "%      SAVE DATABRIDGE       %" !!
+                 T(20) !! "%");
+     WWFL(B(21) !! "%" !! B(28) !! "%");
+     WWFL(B(21) !! C(30));
+     WWFL(" ");
+
+     WWFS("STEP17");
+
+     WWFL(" IF FILE");
+     WWFL("   " !! S26 !! "OBJECT/DATABRIDGE/SUPPORT/" !! SDBNAME !!
+          " ON " !! S07);
+     WWFL("     IS RESIDENT THEN");
+     WWFL("       BEGIN");
+     WWFL("         COPY " !! S26 !! "OBJECT/DATABRIDGE/SUPPORT/"
+                         !! SDBNAME);
+     WWFL("           AS " !! S26 !! "OBJECT/DATABRIDGE/SUPPORT/"
+                         !! SDBNAME !! "/" !! S29C);
+     WWFL("         FROM " !! S06 !! "(PACK)");
+     WWFL("           TO " !! S06 !! "(PACK) [TT1];");
+     WWFL(" ");
+     WWFL("         CPCHECK (""" STEP17 """, TT1);");
+     WWFL(" ");
+     WWFL("         IF BB1 THEN GO TO STEP17;");
+     WWFL("       END;");
+     WWFL(" ");
+    END;
+
+END OF UPDATE_SAVESOFT;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               SAUVETAGE DES STRUCTURES A REORGANISER                 %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE UPDATE_SAVESTR;
+%-------------------------
+
+BEGIN
+
+  EBCDIC ARRAY NOM[0:17];
+  INTEGER      I,J,LOOP;
+  LABEL        SUITE;
+
+%-----------------------------------------------------------------------
+ PROCEDURE SEARCH_STRNOM (STR);
+%- - - - - - - - - - - - - - - -
+
+ VALUE   STR;
+ INTEGER STR;
+
+ BEGIN
+
+   S := HEAD(STRING(NAMS(STR),18),VALCHRS) !! "/" !! S;
+   IF MASN(STR) > 1 THEN
+     SEARCH_STRNOM(MASN(STR));
+
+ END OF SEARCH_STRNOM;
+%-----------------------------------------------------------------------
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%      SAVE  STRUCTURES      %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+
+  FOR LOOP := 0 STEP 1 UNTIL 44 DO
+    BEGIN
+      IF PB + (LOOP * 18) = " " FOR 18 THEN ELSE
+        BEGIN
+          S := HEAD(TAIL(STRING(PB + (LOOP * 18),18)," "),VALCHRS);
+          IF LENGTH(S) > 0 THEN
+            BEGIN
+              REPLACE NOM BY " " FOR 3 WORDS;
+              REPLACE NOM BY S;
+              FOR I := 0 STEP 1 UNTIL (MAXROW - 1) DO
+                IF NAMS(I) = NOM FOR 18 THEN GO TO SUITE;
+              SUITE :
+              IF I < MAXROW THEN
+                BEGIN
+                 IF STRT(I) = 0 THEN
+                   S := S !! "/="
+                   ELSE
+                   SEARCH_STRNOM(MASN(I));
+                 J := * + 1;
+                 WWFL(" ");
+                 WWFS("SVSTR" !! STRING(J,*));
+                 WWFL(" COPY " !! S10 !! SDBNAME !! "/" !! S);
+                 WWFL("   AS " !! S10 !! S31 !! S);
+                 WWFL(" FROM " !! S03  !! "(PACK)");
+                 WWFL("   TO " !! S23 !! "(PACK) [TT1];");
+                 WWFL(" ");
+                 WWFL(" CPCHECK (""" SVSTR" !!
+                        STRING(J,*) !! " """, TT1);");
+                 WWFL(" ");
+                 WWFL(" IF BB1 THEN GO TO SVSTR" !!
+                        STRING(J,*) !! ";");
+                 WWFL(" ");
+                END;
+            END;
+        END;
+    END;
+
+END OF UPDATE_SAVESTR;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               INSTALLATION DES NOUVEAUX SOFTWARES                    %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE UPDATE_NEWSOFT;
+%-------------------------
+
+BEGIN
+
+  BOOLEAN OK;
+  LABEL   EXIT;
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(29) !! "S T E P   2" !! B(30) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" ");
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%    LOAD NEW SOFTWARE       %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+
+  WWFS("STEP21");
+
+  WWFL(" COPY " !! S10 !! "DBA/PO/" !! SDBNAME !! "/DESCRIPTION");
+  WWFL("   AS *DESCRIPTION/" !! SDBNAME);
+  WWFL(" FROM " !! S07 !! "(PACK)");
+  WWFL("   TO " !! S07 !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL(" CPCHECK (""" STEP21 """, TT1); ");
+  WWFL(" ");
+  WWFL(" IF BB1 THEN GO TO STEP21;");
+  WWFL(" ");
+
+  WWFS("STEP22");
+
+  WWFL(" IF FILE");
+  WWFL("   " !! S10 !! "DBA/PO/" !! SDBNAME !! "/RECONSTRUCT"
+        !! " ON " !! S06);
+  WWFL("     IS RESIDENT THEN");
+  WWFL(" BEGIN");
+  WWFL("     COPY " !! S10 !! "DBA/PO/" !! SDBNAME !! "/RECONSTRUCT");
+  WWFL("       AS " !! S10 !! "RECONSTRUCT/" !! SDBNAME);
+  WWFL("       FROM " !! S06  !! "(PACK)");
+  WWFL("       TO " !! S06  !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL("     CPCHECK (""" STEP22 """, TT1); ");
+  WWFL(" ");
+  WWFL("     IF BB1 THEN GO TO STEP22;");
+  WWFL(" END;");
+  WWFL(" ");
+
+  WWFS("STEP23");
+
+  WWFL(" COPY " !! S10 !! "DBA/PO/" !! SDBNAME !! "/DMSUPPORT" !! S28);
+  WWFL("   AS " !! S10 !! "DMSUPPORT/" !! SDBNAME !! S28);
+  WWFL(" FROM " !! S06  !! "(PACK)");
+  WWFL("   TO " !! S06  !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL(" CPCHECK (""" STEP23 """, TT1); ");
+  WWFL(" ");
+  WWFL(" IF BB1 THEN GO TO STEP23;");
+  WWFL(" ");
+
+  IF (NOT BAS_REORGREQ) THEN GO EXIT;
+
+  WWFS("STEP24");
+
+  WWFL(" COPY " !! S10 !! "DBA/PO/" !! SDBNAME !! "/REORGANIZATION");
+  WWFL("   AS " !! S10 !! "REORGANIZATION/" !! SDBNAME);
+  WWFL(" FROM " !! S06  !! "(PACK)");
+  WWFL("   TO " !! S06  !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL(" CPCHECK (""" STEP24 """, TT1); ");
+  WWFL(" ");
+  WWFL(" IF BB1 THEN GO TO STEP24;");
+  WWFL(" ");
+
+EXIT :
+
+END OF UPDATE_NEWSOFT;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%          INSTALLATION DES NOUVEAUX SOFTWARES DATABRIDGE              %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE UPDATE_NEWDATABRIDGE;
+%-------------------------------
+
+BEGIN
+
+  BOOLEAN OK;
+
+  IF NOT NEWSOFT THEN
+    BEGIN
+     WWFL(C(72));
+     WWFL("%" !! B(70) !! "%");
+     WWFL("%" !! B(29) !! "S T E P   2" !! B(30) !! "%");
+     WWFL("%" !! B(70) !! "%");
+     WWFL(C(72));
+     WWFL(" ");
+
+     WWFL(B(21) !! C(30));
+     WWFL(B(21) !! "%" !! B(28) !! "%");
+     WWFL("%" !! T(20) !! "%    LOAD NEW SOFTWARE       %" !!
+               T(20) !! "%");
+     WWFL(B(21) !! "%" !! B(28) !! "%");
+     WWFL(B(21) !! C(30));
+     WWFL(" ");
+    END;
+
+  WWFS("STEP25");
+
+  WWFL(" COPY " !! S10 !! "DBA/PO/" !! SDBNAME
+            !! "/DATABRIDGE/SUPPORT");
+  WWFL("   AS (DATABRIDGE)OBJECT/DATABRIDGE/SUPPORT/"
+            !! SDBNAME !! ",");
+  WWFL("      " !! S10 !! "DBA/PO/" !! SDBNAME
+            !! "/DATABRIDGE/SUPPORT");
+  WWFL("   AS (DATABRIDGE)OBJECT/DATABRIDGE/SUPPORT/"
+            !! SDBNAME !! S29N);
+  WWFL(" FROM " !! S07 !! "(PACK)");
+  WWFL("   TO " !! S07 !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL(" CPCHECK (""" STEP25 """, TT1); ");
+  WWFL(" ");
+  WWFL(" IF BB1 THEN GO TO STEP25;");
+  WWFL(" ");
+
+END OF UPDATE_NEWDATABRIDGE;
+%
+ PROCEDURE IOTA_DATABRIDGE;
+%-------------------------------
+
+BEGIN
+
+  BOOLEAN OK;
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(29) !! "S T E P   58" !! B(29) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" ");
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%  LOAD DATABRIDGE FOR IOTA  %"
+         !! T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+  WWFS("STEP58");
+  WWFL("IF FILE");
+  WWFL("   " !! S10 !! "DBA/PO/" !! SDBNAME
+            !! "/DATABRIDGE/DMSIISUPPORT" !! " ON " !! S07);
+  WWFL("     IS RESIDENT THEN");
+  WWFL("BEGIN");
+  WWFL(" IF BHOSTBETA THEN");
+  WWFL("   BEGIN");
+  WWFL("     COPY " !! S10 !! "DBA/PO/" !! SDBNAME
+            !! "/DATABRIDGE/DMSIISUPPORT");
+  WWFL("        AS *OBJECT/DATABRIDGE/DMSIISUPPORT/" % ex (DATABRIDGEP)
+            !! SDBNAME);
+  WWFL("        FROM " !! S07 !! "(PACK)");
+  WWFL("        TO " !! S07 !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL("        CPCHECK (""" STEP58 """, TT1); ");
+  WWFL("        IF BB1 THEN GO TO STEP58;");
+  WWFL(" ");
+  WWFL("   END;");
+
+  WWFL(" IF BHOSTIOTA THEN");
+  WWFL("   BEGIN");
+
+  WWFL("     COPY " !! S10 !! "DBA/PO/" !! SDBNAME
+            !! "/DATABRIDGE/DMSIISUPPORT");
+  WWFL("        AS *OBJECT/DATABRIDGE/DMSIISUPPORT/" % ex (DATABRIDGES)
+            !! SDBNAME);
+  WWFL("        FROM " !! S07 !! "(PACK)");
+  WWFL("        TO " !! S07 !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL("        CPCHECK (""" STEP58 """, TT1); ");
+  WWFL("        IF BB1 THEN GO TO STEP58;");
+  WWFL(" ");
+  WWFL("   END;");
+  WWFL("END;");
+END OF IOTA_DATABRIDGE;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%                       REORGANISATION                                 %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE UPDATE_REORG;
+%-----------------------
+
+BEGIN
+
+  BOOLEAN OK;
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%       REORGANIZATION       %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+
+  WWFS("STEP32");
+
+  WWFL(" SENDMAIL("""1""");");
+  WWFL(" RUN REORGANIZATION/" !! SDBNAME !!
+       " ON " !! S07 !! " [TT1];");
+  WWFL(" FILE DASDL     (TITLE = *DESCRIPTION/" !! SDBNAME !!
+       " ON " !! S07 !! ");");
+  WWFL(" FILE DMCONTROL (TITLE = *SYSTEM/" !! S11 !!
+       "/DMCONTROL ON DISK);");
+
+  WWFL(" ");
+
+  WWFL(" REOCHECK (""" STEP32 """, TT1);");
+  WWFL(" ");
+  WWFL(" SENDMAIL("""2""");");
+  IF NOT USEREORGDB THEN
+  BEGIN
+     WWFL(" RUN DBA/PO/" !! SDBNAME !! "/OVERRIDE" !!
+          " ON " !! S07 !! ";");
+  END;
+  WWFL(" ");
+
+END OF UPDATE_REORG;
+%
+PROCEDURE INSTALL_MASTER_GUARD;
+%-----------------------
+BEGIN
+% NEW GUARDFILE PROCESS
+    REPLACE PWFL BY " " FOR 15 WORDS;
+    REPLACE PWFL:PWFL BY "  (",""";
+    REPLACE PWFL:PWFL BY "STEP32A";
+    REPLACE PWFL:PWFL BY """,") : BEGIN AXCHECK(",""";
+    REPLACE PWFL:PWFL BY "STEP32A";
+    REPLACE PWFL:PWFL BY ""","); GO TO ";
+    REPLACE PWFL:PWFL BY "STEP32A";
+    REPLACE PWFL:PWFL BY "; END;";
+    PWFL := POINTER(AWFL);
+    REPLACE PWFL + 82 BY SEQNBR := * + 1 FOR 8 DIGITS;
+    WRITE(WFLWS,15,AWFL[*]);
+
+    WWFL(B(21) !! C(36));
+    WWFL(B(21) !! "%" !! B(34) !! "%");
+    WWFL("%" !! T(20)
+                !! "%  INSTALL NEW MASTER GUARD FILE   %" !!
+                T(20) !! "%");
+    WWFL(B(21) !! "%" !! B(34) !! "%");
+    WWFL(B(21) !! C(36));
+    WWFL("STEP32A :");
+    WWFL(" ");
+    WWFL(" IF FILE");
+    WWFL("   DBA/GF/MASTER ON " !! S07);
+    WWFL("     IS RESIDENT THEN");
+    WWFL(" BEGIN");
+    WWFL("   INITIALIZE (TT1);");
+    WWFL("   BB1 := FALSE;");
+    WWFL(" ");
+    WWFL("   COPY DBA/GF/" !! SDBNAME);
+    WWFL("           AS DBA/GF/" !! SDBNAME !! "/OLD");
+    WWFL("         FROM " !! S07 !! "(PACK)");
+    WWFL("           TO " !! S07 !! "(PACK) [TT1];");
+    WWFL(" ");
+    WWFL("   CPCHECK (""" STEP32A """, TT1);");
+    WWFL(" ");
+    WWFL("   IF BB1 THEN GO TO STEP32A;");
+    WWFL(" ");
+    WWFL("   INITIALIZE (TT1);");
+    WWFL("   BB1 := FALSE;");
+    WWFL(" ");
+    WWFL("   COPY DBA/GF/MASTER");
+    WWFL("           AS DBA/GF/" !! SDBNAME);
+    WWFL("         FROM " !! S07 !! "(PACK)");
+    WWFL("           TO " !! S07 !! "(PACK) [TT1];");
+    WWFL(" ");
+    WWFL("   CPCHECK (""" STEP32A """, TT1);");
+    WWFL(" ");
+    WWFL("   IF BB1 THEN GO TO STEP32A;");
+    WWFL(" END;");
+    WWFL(" ");
+END  OF INSTALL_MASTER_GUARD;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               INSTALLATION DES NOUVEAUX PROGRAMMES                   %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE UPDATE_NEWINQ;
+%------------------------
+
+BEGIN
+
+  BOOLEAN OK;
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(29) !! "S T E P   5" !! B(30) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" ");
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%   INSTALL NEW INQUIRIES    %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+  WWFS("STEP51");
+
+  WWFL(" IF FILE");
+  WWFL("   " !! S18 !! "INQUPD/" !! SDBNAME !! " ON " !! S07);
+  WWFL("     IS RESIDENT THEN");
+  WWFL("       BEGIN");
+  WWFL("         COPY " !! S18 !! "INQUPD/" !! SDBNAME);
+  WWFL("           AS " !! S10 !! S31 !! S32 !!
+                      "/INQUPD/" !! S17);
+  WWFL("         FROM " !! S07 !! "(PACK)");
+  WWFL("           TO " !! S07 !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL("         CPCHECK (""" STEP51 """, TT1);");
+  WWFL(" ");
+  WWFL("         IF BB1 THEN GO TO STEP51;");
+  WWFL("       END;");
+  WWFL(" ");
+
+  WWFS("STEP52");
+
+  WWFL(" IF FILE");
+  WWFL("   " !! S18 !! "INQUIRY/" !! SDBNAME !! " ON " !! S07);
+  WWFL("     IS RESIDENT THEN");
+  WWFL("       BEGIN");
+  WWFL("         COPY " !! S18 !! "INQUIRY/" !! SDBNAME);
+  WWFL("           AS " !! S10 !! S31 !! S32 !!
+                      "/INQUIRY/" !! S17);
+  WWFL("         FROM " !! S07 !! "(PACK)");
+  WWFL("           TO " !! S07 !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL("         CPCHECK (""" STEP52 """, TT1);");
+  WWFL(" ");
+  WWFL("         IF BB1 THEN GO TO STEP52;");
+  WWFL("       END;");
+  WWFL(" ");
+
+
+  WWFS("STEP54");
+
+  WWFL(" IF FILE");
+  WWFL("   " !! S10 !! "DBA/PO/" !! SDBNAME !! "/INQUPD ON " !! S07);
+  WWFL("     IS RESIDENT THEN");
+  WWFL("       BEGIN");
+  WWFL("         COPY " !! S10 !! "DBA/PO/" !! SDBNAME !! "/INQUPD");
+  WWFL("           AS " !! S18 !! "INQUPD/" !! SDBNAME);
+  WWFL("         FROM " !! S07 !! "(PACK)");
+  WWFL("           TO " !! S07 !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL("         CPCHECK (""" STEP54 """, TT1);");
+  WWFL(" ");
+  WWFL("         IF BB1 THEN GO TO STEP54;");
+  WWFL("       END;");
+  WWFL(" ");
+
+  WWFS("STEP55");
+
+  WWFL(" IF FILE");
+  WWFL("   " !! S10 !! "DBA/PO/" !! SDBNAME !! "/INQUIRY ON " !! S07);
+  WWFL("     IS RESIDENT THEN");
+  WWFL("       BEGIN");
+  WWFL("         COPY " !! S10 !! "DBA/PO/" !! SDBNAME !! "/INQUIRY");
+  WWFL("           AS " !! S18 !! "INQUIRY/" !! SDBNAME);
+  WWFL("         FROM " !! S07 !! "(PACK)");
+  WWFL("           TO " !! S07 !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL("         CPCHECK (""" STEP55 """, TT1);");
+  WWFL(" ");
+  WWFL("         IF BB1 THEN GO TO STEP55;");
+  WWFL("       END;");
+  WWFL(" ");
+
+  WWFS("STEP56");
+
+  WWFL(" IF FILE");
+  WWFL("   " !! S10 !! "DBA/PO/" !! SDBNAME !! "/DMINTERPRETER ON "
+               !! S07);
+  WWFL("     IS RESIDENT THEN");
+  WWFL("       BEGIN");
+  WWFL("         COPY " !! S10 !! "DBA/PO/" !! SDBNAME
+               !! "/DMINTERPRETER");
+  WWFL("           AS *DMINTERPRETER/" !! SDBNAME);
+  WWFL("         FROM " !! S07 !! "(PACK)");
+  WWFL("           TO " !! S07 !! "(PACK) [TT1];");
+  WWFL(" ");
+  WWFL("         CPCHECK (""" STEP56 """, TT1);");
+  WWFL(" ");
+  WWFL("         IF BB1 THEN GO TO STEP56;");
+  WWFL("       END;");
+  WWFL(" ");
+
+END OF UPDATE_NEWINQ;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               INSTALLATION DES NOUVEAUX SOFT URSA/DARGAL             %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE UPDATE_NEWDARGAL;
+%---------------------------
+
+BEGIN
+
+  BOOLEAN OK;
+
+  WWFS("STEP57");
+
+  WWFL(" IF BHOSTBETA");
+  WWFL("  THEN");
+  WWFL("   BEGIN");
+  WWFL("    IF FILE");
+  WWFL("      " !! S10 !! "WRAPPED/" !! SDBNAME !! "/INQ ON " !! S07);
+  WWFL("        IS RESIDENT THEN");
+  WWFL("          BEGIN");
+  WWFL("            INITIALIZE (TT1);");
+  WWFL("            RUN (BBLP)SYS/PO/OPERATOR ON BBLPR1");
+  WWFL("            ("""""" & """UNWRAP & DSONERROR (DARGALA)= """");
+  WWFL("             & """ OUTOF "!! S10 !! "WRAPPED/" !! SDBNAME
+                                                !! "/INQ """");
+  WWFL("             & """ FROM " !! S07 !! "(KIND=PACK) """");
+  WWFL("             & """ TO PACK(KIND=PACK,RESTRICTED=FALSE)"""");
+  WWFL("                 & """""");       % [TT1];");
+  WWFL(" ");
+  WWFL("%            CPCHECK (""" STEP57 """, TT1);");
+  WWFL(" ");
+  WWFL("%            IF BB1 THEN GO TO STEP57;");
+  WWFL("          END;");
+  WWFL(" ");
+  WWFL("    IF FILE");
+  WWFL("      " !! S10 !! "WRAPPED/" !! SDBNAME !! "/UPD ON " !! S07);
+  WWFL("        IS RESIDENT THEN");
+  WWFL("          BEGIN");
+  WWFL("            INITIALIZE (TT1);");
+  WWFL("            RUN (BBLP)SYS/PO/OPERATOR ON BBLPR1");
+  WWFL("            ("""""" & """UNWRAP & DSONERROR (DARGALA)= """");
+  WWFL("             & """ OUTOF "!! S10 !! "WRAPPED/" !! SDBNAME
+                                                !! "/UPD """");
+  WWFL("             & """ FROM " !! S07 !! "(KIND=PACK) """");
+  WWFL("             & """ TO PACK(KIND=PACK,RESTRICTED=FALSE)"""");
+  WWFL("                 & """""");");% [TT1];");
+  WWFL(" ");
+  WWFL("%            CPCHECK (""" STEP57 """, TT1);");
+  WWFL(" ");
+  WWFL("%            IF BB1 THEN GO TO STEP57;");
+  WWFL("          END;");
+  WWFL("   END;");
+  WWFL(" ");
+
+END OF UPDATE_NEWDARGAL;
+
+%-----------------------------------------------------------------------
+
+ PROCEDURE UPDATE_NEWPROGS;
+%--------------------------
+
+BEGIN
+
+  BOOLEAN OK;
+  INTEGER I, I1;
+  STRING  S, S1;
+  LABEL   NEXTPROG, NEXTLIB;
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(29) !! "S T E P   4" !! B(30) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" ");
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%    INSTALL NEW PROGRAMS    %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+
+  IF NEWBYJOB THEN
+  BEGIN
+    REPLACE PWFL BY " " FOR 15 WORDS;
+    REPLACE PWFL:PWFL BY "  (",""";
+    REPLACE PWFL:PWFL BY "STEP40";
+    REPLACE PWFL:PWFL BY """,") : BEGIN AXCHECK(",""";
+    REPLACE PWFL:PWFL BY "STEP40";
+    REPLACE PWFL:PWFL BY ""","); GO TO ";
+    REPLACE PWFL:PWFL BY "STEP40";
+    REPLACE PWFL:PWFL BY "; END;";
+    PWFL := POINTER(AWFL);
+    REPLACE PWFL + 82 BY SEQNBR := * + 1 FOR 8 DIGITS;
+    WRITE(WFLWS,15,AWFL[*]);
+
+    WWFL("STEP40 :");
+    WWFL(" ");
+    WWFL("% The 2 WAIT's below are only to be used for RDB's.");
+    WWFL("% If you need them, suppress the comment-sign.");
+    WWFL(" ");
+    WWFL("% WAIT (" !! """ !!
+       "WFL R01 00 OPERA 018 : EXECUTE RECLONE NOW" !! """ !!
+       ",OK);");
+    WWFL("% WAIT (" !! """ !!
+       "WFL R01 00 OPERA 018 : RECLONE STARTED ?" !! """ !!
+       ",OK);");
+    WWFL(" ");
+    WWFL(" START DBA/WF/R01/" !! S02 !! "/COPY ON BBLPR1;");
+    WWFL(" ");
+    WWFL(B(21) !! C(30));
+    WWFL(B(21) !! "%" !! B(28) !! "%");
+  END;
+
+END OF UPDATE_NEWPROGS;
+
+%-----------------------------------------------------------------------
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               CREATION DU TRAILER DU JOB                             %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE UPDATE_TRAILER(ItsAReorg);
+%-------------------------
+ Value ItsAReorg;
+ Boolean ItsAReorg;
+
+BEGIN
+
+  BOOLEAN OK;
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(18) !! "E N D   O F   O P E R A T I O N S" !!
+        B(19) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" ");
+
+  WWFL("FIN :");
+  WWFL(" ");
+
+  WWFL("IF BB1 OR BB2 THEN");
+  WWFL("  BEGIN");
+  WWFL("    DISPLAY ("""WFL " !! S02 !! "R01 00 OPERA 018 " !!
+                        SDBNAME !! " """ &");
+  WWFL("             """: BE AWARE, AT LEAST AN OPERATION " !!
+                     "WENT WRONG !""");");
+  WWFL("    DISPLAY ("""WFL " !! S02 !! "R01 00 OPERA 018 " !!
+                        SDBNAME !! " """ &");
+  WWFL("             """: SEE ANNEX 1 OF PLANNING !""");");
+  WWFL("    SENDMAIL("""3""");");
+  WWFL("  END");
+  WWFL("  ELSE");
+  WWFL("  BEGIN");
+  WWFL("    DISPLAY ("""WFL " !! S02 !! "R01 00 OPERA 018 " !!
+                        SDBNAME !! " SUCCESSFUL""");");
+  WWFL("    SENDMAIL("""4""");");
+
+  WWFL("    IF FILE DBA/WF/R01/" !! S02 !! "/DELETE ON BBLPR1");
+  WWFL("        IS RESIDENT THEN");
+  WWFL("    BEGIN");
+  WWFL("       STARTJOB DBA/WF/R01/" !! S02 !! "/DELETE; "
+                 !! "STARTTIME = 00:00 ON +3;");
+  WWFL("    END;");
+  WWFL("  END;");
+  WWFL(" ");
+
+  If ItsAReorg then
+  Begin
+    WWFL("CopyReorgReports("""" !! SDBName !! "","""PACK""");");
+    WWFL(" ");
+  End;
+
+  WWFL("SENDMAIL("""XMIT""");");
+  WWFL(" ");
+
+  WWFL("ENDWFL :");
+  WWFL("? END JOB");
+
+END OF UPDATE_TRAILER;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               CREATION DU HEADER DU JOB DE RESTORE                   %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE RESTORE_HEADER;
+%-------------------------
+
+BEGIN
+
+  INTEGER LOOP;
+
+  WWFL("BEGIN JOB DBA/WF/S01/" !! S02 !!
+         "(STRING PRB OPTIONAL DEFAULT = """OFFLINE"""");
+  WWFL("        ,INTEGER IDT OPTIONAL DEFAULT = 0");
+  WWFL("        ,INTEGER ICOPYWORKERS OPTIONAL DEFAULT = 1);");
+  WWFL("%%%%%%%%% DBA/WF/SDBNAME/" !! S02 !! "/" !! S17);
+%  WWFL("USER       = DBA/DBA;");
+  WWFL("CHARGECODE = " !! S37 !! ";");
+  WWFL("%");
+  WWFL("%  The first parameter contains OFFLINE to restore from"
+          " an OFFLINE DUMP");
+  WWFL("%  or the end point of the REBUILD RECOVERY to restore from"
+         " an ONLINE DUMP");
+  WWFL("%");
+  WWFL("%  Here are a few samples of what it may contain: ");
+  WWFL("% ");
+  WWFL("%     THRU AUDIT 1234  (where 1234 is the last audit to "
+         "process through)");
+  WWFL("%");
+  WWFL("%     TO GEQ APR 2 AT 01:04 (to a time greater or equal to");
+  WWFL("%                            the 2nd of April at 1:04 in "
+         " the morning.");
+  WWFL("%                            GEQ is the only valid option in "
+         "this case)");
+  WWFL("%");
+  WWFL("%     TO EOJ OF 1567/1589 ON AP2 2 AT 05:15");
+  WWFL("%                           (To the first occurrence of either "
+         "the end");
+  WWFL("%                            of the task 1567/1589 or the "
+         "2nd of April");
+  WWFL("%                            at 5:15 in the morning.");
+  WWFL("%                            Both job/task numbers MUST be "
+            "provided.");
+  WWFL("%                            Always use both options to aviod "
+         "a");
+  WWFL("%                            RUNAWAY recovery)");
+  FOR LOOP := 0 STEP 1 UNTIL 3 DO
+    BEGIN
+      WWFL("%");
+    END;
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%")  ;
+  WWFL("%" !! B(23) !! "D E C L A R A T I O N S" !! B(24) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" ");
+
+  WWFL("TASK    TT1;");
+  WWFL(" ");
+
+  WWFL("STRING  MSG,");
+  WWFL("        SS4,");
+  WWFL("        SRB := PRB;");
+  WWFL(" ");
+
+  WWFL("BOOLEAN BB1;");
+  WWFL(" ");
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(24) !! "S U B R O U T I N E S" !! B(25) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+
+  WWFL("SUBROUTINE SRCHECK ( STRING STR, TASK TSK );");
+  WWFL("BEGIN");
+  WWFL(" IF NOT ( TSK IS COMPLETEDOK ) THEN");
+  WWFL("   BEGIN");
+  WWFL("     MSG := """WFL " !! S02 !! "S01 00 " !!
+       "INFOR 002 JOB NOT EXECUTED :""" &              ");
+  WWFL("            """ABORT AT """ & " !!
+       "STR & """/" !! SDBNAME !! """";                    ");
+  WWFL("     ABORT(MSG);                             ");
+  WWFL("   END;");
+  WWFL("END;");
+  WWFL(" ");
+
+  WWFL("SUBROUTINE CPCHECK ( STRING STR, TASK TSK );");
+  WWFL("BEGIN");
+  WWFL(" IF ( TSK ISNT COMPLETEDOK ) OR");
+  WWFL("    ( TSK(VALUE) = 1 ) THEN");
+  WWFL("   BEGIN");
+  WWFL("     MSG := """WFL " !! S02 !! "S01 00 " !!
+       "INFOR 002 JOB NOT EXECUTED :""" &              ");
+  WWFL("            """ABORT AT """ & " !!
+       "STR & """/" !! SDBNAME !! """";                    ");
+  WWFL("     ABORT(MSG);                             ");
+  WWFL("   END;");
+  WWFL("END;");
+  WWFL(" ");
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(10)!!"JOB MUST BE UNDER USERCODE DBA" !! B(30) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" IF MYSELF(USERCODE) NEQ """DBA""" THEN ");
+  WWFL("BEGIN");
+  WWFL("MSG := """This job must be started under DBA user code. """ &");
+  WWFL("       """Type """"""<mix> OK """""" to terminate. """ ;");
+  WWFL("DISPLAY MSG;");
+  WWFL("WAIT (OK);" );
+  WWFL("GO TO ENDWFL;");
+  WWFL("END;");
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(30) !! "B  O  D Y" !! B(31) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" ");
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(29) !! "S T E P   1" !! B(30) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" ");
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%   RESTORE OLD SOFTWARE     %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+
+  WWFL("IF IDT = 0 THEN");
+  WWFL("  SS4 := TIMEDATE(YYYYMMDD)");
+  WWFL("  ELSE");
+  WWFL("  SS4 := STRING(IDT,*);");
+  WWFL(" ");
+
+  WWFL("CHANGE AUDIT/" !! SDBNAME !! "/= ON " !! S04
+         !! " TO (OLDAUDIT)AUDIT/" !! SDBNAME !! "/=;");
+  WWFL(" ");
+
+  WWFL("COPY " !! S10 !! S31 !! S32 !! "/DESCRIPTION/" !! S17);
+  WWFL("  AS *DESCRIPTION/" !! SDBNAME);
+  WWFL(" FROM " !! S07 !! "(PACK)");
+  WWFL("   TO " !! S07 !! "(PACK) [TT1];");
+  WWFL(" ");
+
+  WWFL("CPCHECK (" !! """ !! "COPY DESCRIPTION" !! """ !! ", TT1);");
+  WWFL(" ");
+
+  WWFL("IF BB1 THEN GO TO FIN;");
+  WWFL(" ");
+
+  WWFL("COPY " !! S10 !! S31 !! S32 !! "/DMINTERPRETER/" !! S17);
+  WWFL("  AS *DMINTERPRETER/" !! SDBNAME);
+  WWFL(" FROM " !! S07 !! "(PACK)");
+  WWFL("   TO " !! S07 !! "(PACK) [TT1];");
+  WWFL(" ");
+
+  WWFL("CPCHECK (" !! """ !! "COPY DMINTERPRETER" !! """ !! ", TT1);");
+  WWFL(" ");
+
+  WWFL("IF BB1 THEN GO TO FIN;");
+  WWFL(" ");
+
+  WWFL(" IF FILE");
+  WWFL("   " !! S10  !! S31 !! S32 !! "/RECONSTRUCT/" !! S17
+            !! " ON " !! S06);
+  WWFL("     IS RESIDENT THEN");
+  WWFL(" BEGIN");
+  WWFL("    COPY " !! S10 !! S31 !! S32 !! "/RECONSTRUCT/" !! S17);
+  WWFL("       AS " !! S10 !! "RECONSTRUCT/" !! SDBNAME);
+  WWFL("       FROM " !! S06  !! "(PACK)");
+  WWFL("       TO " !! S06 !! "(PACK) [TT1];");
+  WWFL(" ");
+
+  WWFL("    CPCHECK(" !! """ !! "COPY RECONSTRUCT" !! """ !! ", TT1);");
+  WWFL(" ");
+
+  WWFL("    IF BB1 THEN GO TO FIN;");
+  WWFL(" END;");
+  WWFL(" ");
+
+  WWFL("COPY " !! S10 !! S31 !! S32 !! "/DMSUPPORT/" !! S17);
+  WWFL("  AS " !! S10 !! "DMSUPPORT/" !! SDBNAME);
+  WWFL("FROM " !! S06  !! "(PACK)");
+  WWFL("  TO " !! S06 !! "(PACK) [TT1];");
+  WWFL(" ");
+
+  WWFL("CPCHECK (" !! """ !! "COPY DMSUPPORT" !! """ !! ", TT1);");
+  WWFL(" ");
+
+  WWFL("IF BB1 THEN GO TO FIN;");
+  WWFL(" ");
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%   RESTORE CONTROL FILE     %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+
+  WWFL("COPY " !! S10 !! S31 !! S32 !! "/CONTROL/" !! S17);
+  WWFL("  AS " !! S10 !! SDBNAME !! "/CONTROL");
+  WWFL("FROM " !! S06 !! "(PACK)");
+  WWFL("  TO " !! S05 !! "(PACK) [TT1];");
+  WWFL(" ");
+
+  WWFL("CPCHECK (" !! """ !! "RESTORE CONTROL" !! """ !! ", TT1);");
+  WWFL(" ");
+
+  WWFL("IF BB1 THEN GO TO FIN;");
+  WWFL(" ");
+
+END OF RESTORE_HEADER;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               RESTORE DES STRUCTURES SAUVEES                         %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE RESTORE_SAVESTR;
+%--------------------------
+
+BEGIN
+
+  EBCDIC ARRAY NOM[0:17];
+  INTEGER      I,LOOP;
+  LABEL        SUITE;
+
+%-----------------------------------------------------------------------
+ PROCEDURE SEARCH_STRNOM (STR);
+%- - - - - - - - - - - - - - - -
+
+ VALUE   STR;
+ INTEGER STR;
+
+ BEGIN
+
+   S := HEAD(STRING(NAMS(STR),18),VALCHRS) !! "/" !! S;
+   IF MASN(STR) > 1 THEN
+     SEARCH_STRNOM(MASN(STR));
+
+ END OF SEARCH_STRNOM;
+%-----------------------------------------------------------------------
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%     RESTORE STRUCTURES     %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+
+  FOR LOOP := 0 STEP 1 UNTIL 44 DO
+    BEGIN
+      IF PB + (LOOP * 18) = " " FOR 18 THEN ELSE
+        BEGIN
+          S := HEAD(TAIL(STRING(PB + (LOOP * 18),18)," "),VALCHRS);
+          IF LENGTH(S) > 0 THEN
+            BEGIN
+              REPLACE NOM BY " " FOR 3 WORDS;
+              REPLACE NOM BY S;
+              FOR I := 0 STEP 1 UNTIL (MAXROW - 1) DO
+                IF NAMS(I) = NOM FOR 18 THEN GO TO SUITE;
+              SUITE :
+              IF I < MAXROW THEN
+                BEGIN
+                 IF STRT(I) = 0 THEN
+                   S := S !! "/="
+                   ELSE
+                   SEARCH_STRNOM(MASN(I));
+                  WWFL("COPY " !! S10 !! S31 !! S);
+                  WWFL("  AS " !! S10 !! SDBNAME !! "/" !! S);
+                 WWFL("FROM " !! S23 !! "(PACK)");
+                 WWFL("  TO " !! S03 !! "(PACK) [TT1];");
+                 WWFL(" ");
+                 WWFL("CPCHECK (" !! """ !! "COPY DATA" !!
+                      """ !! ", TT1);");
+                 WWFL(" ");
+                 WWFL("IF BB1 THEN GO TO FIN;");
+                 WWFL(" ");
+                END;
+            END;
+        END;
+    END;
+
+END OF RESTORE_SAVESTR;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               RECHARGEMENT DE LA BASE                                %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE RESTORE_SAVEDB;
+%-------------------------
+
+BEGIN
+
+  BOOLEAN OK;
+
+  IF USEREORGDB THEN
+  BEGIN
+     WWFL(B(21) !! C(30));
+     WWFL(B(21) !! "%" !! B(28) !! "%");
+     WWFL("%" !! T(20) !! "%   REMOVE TEMP REORG FILES  %" !!
+                 T(20) !! "%");
+     WWFL(B(21) !! "%" !! B(28) !! "%");
+     WWFL(B(21) !! C(30));
+     WWFL(" ");
+     WWFL("REMOVE (DBA)REORG" !! SDBNAME !! "/= ON BBLPR1;");
+     WWFL("REMOVE (DBA)REORG" !! SDBNAME !! "/= ON PACK;");
+     WWFL("REMOVE (DBA)REORG" !! SDBNAME !! "/= ON "
+                  !! HEAD(TAIL(STRING(DEF_DBPKNAME,18)," "),VALCHR)
+                  !! ";" !! "    % FAMILYNAME DB");
+%     IF DEF_DSPKNAME != DEF_SPKNAMBBLPR1 THEN
+%     BEGIN
+%         WWFL("REMOVE (DBA)REORG" !! SDBNAME !! "/= ON "
+%               !! DEF_SPKNAMBBLPR1 !! ";"
+%               !! "    % FAMILYNAME SET  (DEFAULT)");
+%     END;
+  END;
+
+  WWFL(B(21) !! C(30));
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL("%" !! T(20) !! "%       LOAD DATABASE        %" !!
+              T(20) !! "%");
+  WWFL(B(21) !! "%" !! B(28) !! "%");
+  WWFL(B(21) !! C(30));
+  WWFL(" ");
+
+  WWFL("IF SRB = """OFFLINE""" THEN");
+  WWFL("BEGIN");
+  WWFL("    RUN SYSTEM/" !! S11 !! "/DMUTILITY");
+  WWFL("      (" !! """ !!
+       " DB = " !! SDBNAME !! " ON " !! S05 !! """ !! "&");
+  WWFL("       " !! """ !!
+       " OPTIONS (WORKERS= " !! """ !! "& " !! SCOW !! " &"
+       !! """ !! " )" !! """ !! "&");
+   IF USEREORGDB THEN
+   BEGIN
+      WWFL("       " !! """ !!
+            " COPY = FROM " !! S13P !! "SBFREORG" !! """ !! ") [TT1];");
+   END
+   ELSE
+   BEGIN
+      WWFL("       " !! """ !!
+            " COPY = FROM " !! S13P !! "S" !! """ !! ") [TT1];");
+   END;
+  WWFL(" ");
+
+  WWFL("    SRCHECK (" !! """ !! "DB LOAD" !! """ !! ", TT1);");
+  WWFL("END");
+  WWFL("ELSE");
+  WWFL("BEGIN");
+  WWFL("    RUN SYSTEM/" !! S11 !! "/DMUTILITY");
+  WWFL("      (" !! """ !!
+       " DB = " !! SDBNAME !! " ON " !! S05 !! """ !! "&");
+  WWFL("       " !! """ !!
+       " OPTIONS (NOZIP) RECOVER(REBUILD " !! """ !! "& SRB &"
+       !! """ !! " )" !! """ !! "&");
+   IF USEREORGDB THEN
+   BEGIN
+      WWFL("       " !! """ !!
+            " COPY = FROM " !! S13P !! "SBFREORG" !! """ !! ") [TT1];");
+   END
+   ELSE
+   BEGIN
+      WWFL("       " !! """ !!
+            " COPY = FROM " !! S13P !! "S" !! """ !! ") [TT1];");
+   END;
+  WWFL(" ");
+
+  WWFL("    SRCHECK (" !! """ !! "DB REBUILD" !! """ !! ", TT1);");
+  WWFL(" ");
+  WWFL("    INITIALIZE (TT1);");
+  WWFL(" ");
+
+  WWFL("    RUN SYSTEM/" !! S11 !! "/DMRECOVERY");
+  WWFL("      (" !! """ !!
+       " DB = " !! SDBNAME !! " ON " !! S05 !! """ !! ") [TT1];");
+  WWFL(" ");
+
+  WWFL("    SRCHECK (" !! """ !! "DB RECOVERY" !! """ !! ", TT1);");
+  WWFL("END;");
+
+%  WWFL("IF BB1 THEN GO TO FIN;");
+  WWFL(" ");
+
+END OF RESTORE_SAVEDB;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               CREATION DU TRAILER DU JOB DE RESTORE                  %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ PROCEDURE RESTORE_TRAILER;
+%--------------------------
+
+BEGIN
+
+  BOOLEAN OK;
+
+  WWFL(C(72));
+  WWFL("%" !! B(70) !! "%");
+  WWFL("%" !! B(18) !! "E N D   O F   O P E R A T I O N S" !!
+        B(19) !! "%");
+  WWFL("%" !! B(70) !! "%");
+  WWFL(C(72));
+  WWFL(" ");
+
+  WWFL("FIN :");
+  WWFL(" ");
+
+  WWFL("IF BB1 THEN");
+  WWFL("  BEGIN");
+  WWFL("    DISPLAY ("""WFL " !! S02 !! "S01 00 OPERA 018 " !!
+                        SDBNAME !! " """ &");
+  WWFL("             """: BE AWARE, AT LEAST AN OPERATION " !!
+                     "WENT WRONG !""");");
+  WWFL("    DISPLAY ("""WFL " !! S02 !! "S01 00 OPERA 018 " !!
+                        SDBNAME !! " """ &");
+  WWFL("             """: SEE ANNEX 1 OF PLANNING !""");");
+  WWFL("  END");
+  WWFL("  ELSE");
+  WWFL("    DISPLAY ("""WFL " !! S02 !! "S01 00 OPERA 018 " !!
+                        SDBNAME !! " SUCCESSFUL""");");
+  WWFL(" ");
+
+  WWFL("ENDWFL :");
+
+  WWFL("? END JOB");
+
+END OF RESTORE_TRAILER;
+%
+PROCEDURE CREATEVERIFYDUMPWFL;
+%-----------------------------
+BEGIN
+   S := "DBA/WF/R01/" !! S02 !! "/" !! S17 !! "/VERIFYDUMP.";
+   REPLACE PJOB_TIT BY S;                % VerifyDUMP
+   REPLACE WFLVFD.TITLE BY PJOB_TIT;
+   SEQNUM := 9999000; % RESET SEQUENCE NUMBER
+   WWFLVFD("BEGIN JOB DBA/WF/R01/" !! S02 !! "/VERIFYDUMP");
+   WWFLVFD("                       (STRING PSVERIFYPARAM);");
+   WWFLVFD("%%%%%%%%% DBA/WF/R01/" !! S02 !! "/" !! S17);
+
+   WWFLVFD("CHARGECODE=DBS;");
+   WWFLVFD("PRIORITY = 50;");
+   WWFLVFD("NAME=DBA/WF/R01/" !! S02 !! "/VERIFYDUMP;");
+   WWFLVFD("%");
+   WWFLVFD("%");
+   WWFLVFD("%");
+   WWFLVFD("%");
+   WWFLVFD("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+            !! "%%%%%%%%%%%%%%%");
+   WWFLVFD("%                                                        "
+            !! "              %");
+   WWFLVFD("%                       D E C L A R A T I O N S          "
+            !! "              %");
+   WWFLVFD("%                                                        "
+            !! "              %");
+   WWFLVFD("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+            !! "%%%%%%%%%%%%%%%");
+   WWFLVFD(" ");
+   WWFLVFD("TASK    TT1;");
+   WWFLVFD("TASK    TSKOK;");
+   WWFLVFD(" ");
+   WWFLVFD("BOOLEAN BB1");
+   WWFLVFD("       ,BB2;");
+   WWFLVFD("FILE F806 (KIND=DISK, DEPENDENTSPECS);");
+   WWFLVFD("STRING MSG");
+   WWFLVFD("      ,SVERIFYPARAM;");
+   WWFLVFD(" ");
+   WWFLVFD("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+            !! "%%%%%%%%%%%%%%%");
+   WWFLVFD("%                                                        "
+            !! "              %");
+   WWFLVFD("%                 JOB MUST BE UNDER USERCODE DBA         "
+            !! "              %");
+   WWFLVFD("%                                                        "
+            !! "              %");
+   WWFLVFD("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+            !! "%%%%%%%%%%%%%%%");
+   WWFLVFD("IF MYSELF(USERCODE) NEQ """DBA""" THEN ");
+   WWFLVFD("BEGIN");
+   WWFLVFD("    "
+         !! "MSG := """This job must be started under DBA user code. """
+             & ");
+   WWFLVFD("       """Type """"""<mix> OK """""" to terminate. """ ;");
+   WWFLVFD("    DISPLAY MSG;");
+   WWFLVFD("    WAIT (OK);" );
+   WWFLVFD("    GO TO ENDWFL;");
+   WWFLVFD("END;");
+
+   WWFLVFD(" ");
+   WWFLVFD("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+            !! "%%%%%%%%%%%%%%%");
+   WWFLVFD("%                                                        "
+            !! "              %");
+   WWFLVFD("%                                      B O D Y           "
+            !! "              %");
+   WWFLVFD("%                                                        "
+            !! "              %");
+   WWFLVFD("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+            !! "%%%%%%%%%%%%%%%");
+   WWFLVFD("SVERIFYPARAM := PSVERIFYPARAM;");
+   WWFLVFD("RUN SYSTEM/" !! S11 !! "/DMUTILITY (SVERIFYPARAM) [TT1];");
+   WWFLVFD("IF TT1(VALUE) = 1 THEN");
+   WWFLVFD("    DISPLAY " !! """ !! "VERIFYDUMP COMPLETED SUCCESSFULLY"
+            !! """);
+   WWFLVFD("ELSE");
+   WWFLVFD("    IF TT1(VALUE) = 2 THEN");
+   WWFLVFD("        WAIT (" !! """ !! "VERIFYDUMP RETURNED A WARNING."
+            !! " PLEASE VERIFY" !! """ !! ",OK);");
+   WWFLVFD("    ELSE");
+   WWFLVFD("        IF TT1(VALUE) = 0 OR TT1 ISNT COMPLETEDOK THEN");
+   WWFLVFD("        BEGIN");
+   WWFLVFD("            WAIT (" !! """
+   !! "*<<< VERIFYDUMP FAILED - COMPLETE OFFLINE DUMP REQUIRED >>>*"
+   !! """);
+   WWFLVFD("                   ,OK);");
+   WWFLVFD("            ABORT;");
+   WWFLVFD("        END;");
+   WWFLVFD ("ENDWFL :");
+   WWFLVFD("? END JOB");
+   LOCK(WFLVFD,CRUNCH);
+END of CREATEVERIFYDUMPWFL;
+%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%                             MAIN PROGRAM                             %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+IF NOT READ_PAR THEN
+  BEGIN
+    WRITE(ECRAN,<"MISSING DATABASE NAME">);
+    GO TO EOJ;
+  END;
+
+REPLACE SCREEN    BY " " FOR 1920;      % INITIALIZE SCREEN
+REPLACE PARAM     BY " " FOR 1920;      % INITIALIZE INPUT
+REPLACE DAT       BY " " FOR 12;        % INITIALIZE DATE REORG.
+REPLACE OPT       BY " " FOR 18;        % INITIALIZE OPTIONS
+REPLACE SAVSTRARY BY " " FOR 1200;      % INITIALIZE SAVE  STR.
+REPLACE INISTRARY BY " " FOR 1200;      % INITIALIZE INIT  STR.
+REPLACE REOSTRARY BY " " FOR 1200;      % INITIALIZE REORG STR.
+PDAS_TIT    := POINTER(DAS_TIT);        % ASSIGN POINTER
+PJOB_TIT    := POINTER(JOB_TIT);        % ASSIGN POINTER
+PWFL        := POINTER(AWFL);           % ASSIGN POINTER
+PXFR1       := POINTER(AXFR1);           % ASSIGN POINTER
+PXFR2       := POINTER(AXFR2);           % ASSIGN POINTER
+SEQNUM      := 9999000;                 % INITIALIZE SEQUENCE NUMBER
+UPDCONTROL  := TRUE;                    % UPDATE CONTROL FILE
+S17         := " ";                     % INITIALIZE PRGNAME (REORG)
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%                                                                      %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+L1 := LENGTH(SDBNAME);
+
+IF L1 = 0 THEN GO TO EOJ;
+
+%S02 := TAKE(DROP(SDBNAME,1),3);
+S02 := DROP(SDBNAME,1);
+S37 := TAKE(DROP(SDBNAME,1),3);
+S38 := DROP(SDBNAME,1);
+SDUW := "STRING(IWORKERS,*)";
+SDUT := "STRING(ITAPES,*)";
+SCOW := "STRING(ICOPYWORKERS,*)";
+MAKE_DATE;
+
+S := "DESCRIPTION/" !! SDBNAME !! ".";      % DESCRIPTION FILE NAME
+REPLACE PDAS_TIT BY S;
+REPLACE DASDL.TITLE BY PDAS_TIT;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               ANALYSE DE LA DESCRIPTION FILE                         %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ S10 := " ";
+FIND_DATABASE_PROP;
+
+NOF_STR := BLB_ARR[BEG_LST];
+OLD_BST := (-1);
+INXS    := 0;
+
+LOOP_STR :
+
+  IF INXS := * + 1 > NOF_STR THEN GO END_LOOP;
+
+  STR_ADD := BEG_LST + INXS;
+  BLK_STR := BLB_ARR[STR_ADD].[NODEBLOCK];
+  BEG_STR := BLB_ARR[STR_ADD].[NODEPROLS];
+
+  IF BLK_STR NEQ OLD_BST THEN
+    BEGIN
+      OLD_BST := BLK_STR;
+      WRD_ADD := BEG_BLK + BLK_STR;
+      DAS_ADD := BL0_ARR[WRD_ADD];
+      READ_A_BLOCK(BLS_ARR,DAS_ADD);
+      BLS_TXT := BLS_ARR[TEXTBASELOC];
+    END;
+
+  IF BLS_ARR[BEG_STR + LEVELF ] EQL 0 THEN GO LOOP_STR;
+  IF BLS_ARR[BEG_STR + DELETED] EQL 1 THEN GO LOOP_STR;
+
+  IF BLS_ARR[BEG_STR + TYPEF  ] EQL 2 THEN
+    BEGIN
+      FIND_DATASET_PROP;
+      GO LOOP_STR;
+    END;
+
+  IF BLS_ARR[BEG_STR + TYPEF  ] EQL 5 THEN
+    BEGIN
+      FIND_SET_PROP;
+      GO LOOP_STR;
+    END;
+
+  GO LOOP_STR;
+
+END_LOOP :
+
+% READ(ECRAN);
+
+  FIND_LEVEL;
+
+  PA := INISTRARY[0];
+  PB := SAVSTRARY[0];
+  PC := WORKARRAY[0];
+
+  REPLACE PA BY " " FOR 10000;
+  REPLACE PB BY " " FOR 10000;
+  REPLACE PC BY " " FOR 10000;
+
+  FOR I := 0 STEP 1 UNTIL (MAXROW - 1) DO
+    IF STRN(I) > 0 THEN
+      IF MASN(I) < 2 THEN
+        SEARCH_STRMOD(I);
+
+  I := OFFSET(PC);
+  IF I > 0 THEN
+    REPLACE REOSTRARY[0] BY WORKARRAY[2] FOR I - 2,";";
+
+% SDBNAME                                           % NOM DE LA BASE
+% S02                                           % SIGLE JOB
+% S03                                           % PACK DATA
+% S04                                           % PACK AUDIT
+% S05                                           % PACK CONTROL
+  S06   := "BBLPR1";                            % PACK DMSUPPORT
+  S07   := "BBLPR1";                            % PACK PROGRAMS
+  S08   := "BBLP";                              % USERCODE
+  S09   := "BBLP";                              % PASSWORD (PRG.)
+   IF S10 = " " THEN S10  := "BBLP";             % USERCODE (BASE)
+% S11                                           % RELEASE ('DMSXXX')
+  S12  := "DBS";                                % SIGLE NEW PROG.
+  S13  := "STANDARD";                           % LABEL
+%  S13P := TAKE(SDBNAME,4);                          %       PREFIX
+  S13P := SDBNAME;                                  %       PREFIX
+  S13S := "MDD";                                %       SUFFIX
+  COPS := 1;                                    % NOMBRE DE COPIES
+  SDENS:= "FMTST9840D";                          % FMT36TRK OR BPI38000
+  S24  := " 43690";                             % BLKSZ FOR FMTST9840
+  WRKS := 1;                                    % WORKERS
+  TAPS := 1;                                    % TAPES
+  S17  := STRING(DAT,8);                        % MARKID
+  S19  := " ";                                  % INIT STRUCTURES (A)
+  S20  := " ";                                  % INIT STRUCTURES (B)
+% S22  := S03;                                  % DICT PACK = DATA
+  S23  := "PACK";                               % WORK PACK
+  S26  := "(DATABRIDGE)";                       % USERCODE DATABRIDGE
+  S31  := "DBA/FT/OLD/" !! SDBNAME !! "/";          % PREFIXE SAUVETAGE
+  S32  := "#SS4";                               % DATE DU RUN
+  S36  := EMPTY;                                % OFFLINE OR BLK
+  IF BAS_REORGREQ THEN
+    BEGIN
+      REPLACE OPT[00] BY "Y" FOR 1;
+      REPLACE OPT[10] BY "N" FOR 1;
+    END
+    ELSE
+    BEGIN
+      REPLACE OPT[00] BY "N" FOR 1;             % REORGANIZATION
+      REPLACE OPT[10] BY "N" FOR 1;             % SAVE STRUCTURES
+    END;
+  IF UPDCONTROL THEN
+    REPLACE OPT[01] BY "Y" FOR 1
+    ELSE
+    REPLACE OPT[01] BY "N" FOR 1;               % UPDATE CONTROL FILE
+  REPLACE OPT[02] BY "N" FOR 1;                 % DUMP BEFORE
+  REPLACE OPT[03] BY "N" FOR 1;                 %      OFFLINE
+  REPLACE OPT[04] BY "Y" FOR 1;                 %      AFTER
+  REPLACE OPT[05] BY "Y" FOR 1;                 %      OFFLINE
+  REPLACE OPT[06] BY "Y" FOR 1;                 % INSTALL SOFTWARE
+  REPLACE OPT[07] BY "Y" FOR 1;                 %         INQUIRIES
+  REPLACE OPT[08] BY "N" FOR 1;                 % DON'T INSTAL DARGAL
+  REPLACE OPT[09] BY "N" FOR 1;                 % INSTALL DATABRIDGE
+  IF INISTRARY[0] NEQ " " FOR 1 THEN
+    REPLACE OPT[11] BY "Y" FOR 1
+    ELSE
+    REPLACE OPT[11] BY "N" FOR 1;               % INIT STRUCTURES
+  IF (NOT BAS_REORGREQ) THEN
+    REPLACE OPT[00] BY "N" FOR 1;               %
+  REPLACE OPT[12] BY "Y" FOR 1;                 % FILE XFER
+  REPLACE OPT[13] BY "Y" FOR 1;                 % INSTALL PROGS  LIBS
+  REPLACE PARAM  BY " " FOR 1920;
+  REPLACE ACTION BY " " FOR 1920;
+  I := 69;
+
+  REPLACE PARAM[I] BY SDBNAME;IP(17);               % DATABASE   NAME
+  REPLACE PARAM[I] BY S10;IP( 9);               %            USERCODE
+  REPLACE PARAM[I] BY S11;IP( 6);               %            LEVEL SOFT
+  REPLACE PARAM[I] BY S28;IP( 3);               %            LEVEL UPD
+  REPLACE PARAM[I] BY S05;IP( 9);               % PACKNAME   CONTROL
+  REPLACE PARAM[I] BY S04;IP( 9);               %            AUDIT
+  REPLACE PARAM[I] BY S03;IP( 9);               %            DATA SET
+  REPLACE PARAM[I] BY S03;IP( 9);               %            SET
+  REPLACE PARAM[I] BY S06;IP( 9);               %            DMSUPPORT
+  REPLACE PARAM[I] BY S02;IP( 3);               % APPLIC.    SIGLE
+  REPLACE PARAM[I] BY S08;IP( 9);               %            USERCODE
+  REPLACE PARAM[I] BY OPT[00] FOR 1;IP( 1);     % REORGANIZATION
+  REPLACE PARAM[I] BY OPT[01] FOR 1;IP( 1);     % UPDATE     CONTROL
+  REPLACE PARAM[I] BY S17;IP( 8);               %            MARKID
+  ISC1 := I;
+                                                % SCREEN 2
+  REPLACE PARAM[I] BY OPT[02] FOR 1;IP( 1);     % DUMP       BEFORE
+  REPLACE PARAM[I] BY OPT[03] FOR 1;IP( 1);     %            OFFLINE
+  REPLACE PARAM[I] BY OPT[04] FOR 1;IP( 1);     %            AFTER
+  REPLACE PARAM[I] BY OPT[05] FOR 1;IP( 1);     %            OFFLINE
+  REPLACE PARAM[I] BY S13;IP(12);               % DUMP       LABEL
+  REPLACE PARAM[I] BY COPS FOR 1 DIGITS;IP( 1); %            COPIES
+  REPLACE PARAM[I] BY S13S;IP( 3);              %            SUFFIX
+  REPLACE PARAM[I] BY SDENS;IP(10);             %            DENSITY
+  REPLACE PARAM[I] BY WRKS FOR 1 DIGITS;IP( 1); %            WORKERS
+  REPLACE PARAM[I] BY TAPS FOR 1 DIGITS;IP( 1); %            TAPES
+  REPLACE PARAM[I] BY S24;IP( 6);               %            BLOCKSIZE
+  REPLACE PARAM[I] BY OPT[10] FOR 1;IP( 1);     % OPTION SAVE STR.
+  REPLACE PARAM[I] BY OPT[11] FOR 1;IP( 1);     % OPTION INIT STR.
+  REPLACE PARAM[I] BY OPT[06] FOR 1;IP( 1);     % INSTALL    SOFTWARE
+  REPLACE PARAM[I] BY OPT[07] FOR 1;IP( 1);     %            INQUIRIES
+  REPLACE PARAM[I] BY OPT[13] FOR 1;IP( 1);     % PROGS/LIBS JOB
+  REPLACE PARAM[I] BY OPT[08] FOR 1;IP( 1);     % DARGAL
+ $ Set Omit = Not DataBridge
+  REPLACE PARAM[I] BY OPT[09] FOR 1;IP( 1);     % DATABRIDGE
+ $ Pop Omit
+  REPLACE PARAM[I] BY OPT[12] FOR 1;IP( 1);     % OPTION FILE WDXFR
+  ISC2 := I;
+                                                % SCREEN 3
+  REPLACE PARAM[I] BY " ";IP(136);              % INITIALIZE BEFORE
+  REPLACE PARAM[I] BY S19;IP(136);              %            AFTER
+  REPLACE PARAM[I] BY S20;IP(376);              % REORGANIZE STRUCT.
+  ISC3 := I;
+
+DISPLAY_SC1 :
+
+   PT   := PARAM[0];                            % WRITE SCREEN 1
+   POUT := ACTION[0];
+   J    := ISC1;
+   REPLACE PT     BY "+" FOR 1," " FOR 68;
+   REPLACE POUT   BY " " FOR 1920;
+   PSCR := SCREEN[0];
+   REPLACE PSCR:PSCR BY SCR01;
+
+   WRITE(ECRAN,OFFSET(PSCR),SCREEN);
+   READ(ECRAN,J,ACTION);
+
+   IF ACTION[0] = "Q" FOR 1 THEN GO TO EOJ;
+   IF ACTION[0] = "-" FOR 1 THEN GO TO DISPLAY_SC1;
+   IF ACTION[0] = "R" FOR 1 THEN GO TO DISPLAY_SC1;
+   REPLACE PARAM[69] BY ACTION[69] FOR (J - 69);
+
+DISPLAY_SC2 :
+
+   PT   := PARAM[ISC1];                         % WRITE SCREEN 2
+   POUT := ACTION[0];
+   J    := ISC2 - ISC1 + 69;
+   REPLACE PARAM  BY "CREATE"," " FOR 63;
+   REPLACE POUT   BY " " FOR 1920;
+   PSCR := SCREEN[0];
+   REPLACE PSCR:PSCR BY SCR02;
+
+   WRITE(ECRAN,OFFSET(PSCR),SCREEN);
+   READ(ECRAN,J,ACTION);
+
+   IF ACTION[0] = "Q" FOR 1 THEN GO TO EOJ;
+   IF ACTION[0] = "-" FOR 1 THEN GO TO DISPLAY_SC1;
+   IF ACTION[0] = "R" FOR 1 THEN GO TO DISPLAY_SC2;
+   REPLACE PARAM[ISC1] BY ACTION[69] FOR (J - 69);
+   REPLACE OPT[10] BY PARAM[ISC1 + (J - 69) -  8] FOR 2;
+   REPLACE OPT[12] BY PARAM[ISC1 + (J - 69) -  1] FOR 1;
+
+DISPLAY_SC3 :
+
+   IF OPT[10] NEQ "Y" FOR 1 THEN
+    IF ACTION[0] = "-" THEN
+        GO TO DISPLAY_SC2
+       ELSE
+        GO TO DISPLAY_SC4;
+
+   PT1  := SAVSTRARY[0];                        % WRITE SCREEN 3
+   POUT := ACTION[0];
+   PSCR := SCREEN[0];
+   REPLACE PARAM  BY "CREATE"," " FOR 63;
+   REPLACE POUT   BY " " FOR 1920;
+   REPLACE PSCR   BY " " FOR 1920;
+   REPLACE PSCR:PSCR BY SCR03;
+   THRU 15 DO
+     REPLACE PSCR:PSCR BY SCR031;
+   REPLACE PSCR:PSCR BY FORMS;
+
+   WRITE(ECRAN,OFFSET(PSCR),SCREEN);
+   READ(ECRAN,879,ACTION);
+
+   IF ACTION[0] = "Q" FOR 1 THEN GO TO EOJ;
+   IF ACTION[0] = "-" FOR 1 THEN GO TO DISPLAY_SC2;
+   IF ACTION[0] = "R" FOR 1 THEN GO TO DISPLAY_SC3;
+   REPLACE SAVSTRARY[0] BY ACTION[69] FOR 810;
+
+DISPLAY_SC4 :
+
+   IF OPT[11] NEQ "Y" FOR 1 THEN
+    IF ACTION[0] = "-" THEN
+        GO TO DISPLAY_SC3
+       ELSE
+        GO TO DISPLAY_SC5;
+
+   PT1  := INISTRARY[0];                        % WRITE SCREEN 4
+   POUT := ACTION[0];
+   PSCR := SCREEN[0];
+   REPLACE PARAM  BY "CREATE"," " FOR 63;
+   REPLACE POUT   BY " " FOR 1920;
+   REPLACE PSCR   BY " " FOR 1920;
+   REPLACE PSCR:PSCR BY SCR04;
+   THRU 7 DO
+     REPLACE PSCR:PSCR BY SCR031;
+   REPLACE PSCR:PSCR BY SCR041;
+   THRU 7 DO
+     REPLACE PSCR:PSCR BY SCR031;
+   REPLACE PSCR:PSCR BY FORMS;
+
+   WRITE(ECRAN,OFFSET(PSCR),SCREEN);
+   READ(ECRAN,825,ACTION);
+
+   IF ACTION[0] = "Q" FOR 1 THEN GO TO EOJ;
+   IF ACTION[0] = "-" FOR 1 THEN GO TO DISPLAY_SC3;
+   IF ACTION[0] = "R" FOR 1 THEN GO TO DISPLAY_SC4;
+   REPLACE INISTRARY[0] BY ACTION[69] FOR 756;
+
+DISPLAY_SC5 :
+
+   IF ACTION[0] = "-" THEN
+     GO TO DISPLAY_SC4;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%                                                                      %
+%               CREATION DU WORK FLOW                                  %
+%                                                                      %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+CREATION_OF_WFL :
+
+  I := 69 + 17;
+
+  BAS_REORGREQ := FALSE;
+  UPDCONTROL   := FALSE;
+
+% SDBNAME
+  S10 := HEAD(TAIL(STRING(PARAM[I], 9)," "),VALCHR);IP( 9);
+  S11 := HEAD(TAIL(STRING(PARAM[I], 6)," "),VALCHR);IP( 6);
+  S28 := HEAD(TAIL(STRING(PARAM[I], 3)," "),VALNUM);IP( 3);
+  S05 := HEAD(TAIL(STRING(PARAM[I], 9)," "),VALCHR);IP( 9);
+  S04 := HEAD(TAIL(STRING(PARAM[I], 9)," "),VALCHR);IP( 9);
+  S03 := HEAD(TAIL(STRING(PARAM[I], 9)," "),VALCHR);IP( 9);
+  S03 := HEAD(TAIL(STRING(PARAM[I], 9)," "),VALCHR);IP( 9);
+  S06 := HEAD(TAIL(STRING(PARAM[I], 9)," "),VALCHR);IP( 9);
+ % S02 := HEAD(TAIL(STRING(PARAM[I], 3)," "),VALCHR);IP( 3);
+  S37 := HEAD(TAIL(STRING(PARAM[I], 3)," "),VALCHR);IP( 3);
+  S08 := HEAD(TAIL(STRING(PARAM[I], 9)," "),VALCHR);IP( 9);
+  IF PARAM[I] = "Y" FOR 1 THEN BAS_REORGREQ:= TRUE;IP( 1);
+  IF PARAM[I] = "Y" FOR 1 THEN UPDCONTROL  := TRUE;IP( 1);
+  S17 := HEAD(TAIL(STRING(PARAM[I], 8)," "),VALCHR);IP( 8);
+  IF PARAM[I] = "Y" FOR 1 THEN SVDBBEFORE   := TRUE;IP( 1);
+  IF PARAM[I] = "Y" FOR 1 THEN SVDBBEFOFF   := TRUE;IP( 1);
+  IF PARAM[I] = "Y" FOR 1 THEN SVDBAFTER    := TRUE;IP( 1);
+  IF PARAM[I] = "Y" FOR 1 THEN SVDBAFTOFF   := TRUE;IP( 1);
+  S13 := HEAD(TAIL(STRING(PARAM[I],12)," "),VALCHR);IP(12);
+  S13C:= HEAD(TAIL(STRING(PARAM[I], 1)," "),VALNUM);IP( 1);
+  S13S:= HEAD(TAIL(STRING(PARAM[I], 3)," "),VALCHR);IP( 3);
+  S14 := HEAD(TAIL(STRING(PARAM[I],10)," "),VALCHR);IP(10);
+  S15 := HEAD(TAIL(STRING(PARAM[I], 1)," "),VALNUM);IP( 1);
+  S16 := HEAD(TAIL(STRING(PARAM[I], 1)," "),VALNUM);IP( 1);
+  S24 := HEAD(TAIL(STRING(PARAM[I], 6)," "),VALNUM);IP( 6);
+  IF PARAM[I] = "Y" FOR 1 THEN SVSTRUCT     := TRUE;IP( 1);
+  IF PARAM[I] = "Y" FOR 1 THEN INITSTRUCT   := TRUE;IP( 1);
+  IF PARAM[I] = "Y" FOR 1 THEN NEWSOFT      := TRUE;IP( 1);
+  IF PARAM[I] = "Y" FOR 1 THEN NEWINQ       := TRUE;IP( 1);
+  IF PARAM[I] = "Y" FOR 1 THEN NEWBYJOB     := TRUE;IP( 1);
+  IF PARAM[I] = "Y" FOR 1 THEN NEWDARGAL    := TRUE;IP( 1);
+ $ Set Omit = Not DataBridge
+  IF PARAM[I] = "Y" FOR 1 THEN NEWDATABRIDGE:= TRUE;IP( 1);
+ $ Pop Omit
+  IF PARAM[I] = "Y" FOR 1 THEN GENWDXFER    := TRUE;IP( 1);
+
+  GENWFLRES   := TRUE;
+
+  IF LENGTH(S28) NEQ 0 THEN
+    S28 := "/" !! S28;
+
+  IF LENGTH(S29N) NEQ 0 THEN
+    S29N := "/" !! S29N;
+
+   IF TAKE(S10,1) = "*" THEN ELSE
+    S10 := "(" !! TAKE(S10,LENGTH(S10)) !! ")";
+  IF TAKE(S08,1) = "*" THEN ELSE
+    S18 := "(" !! TAKE(S08,LENGTH(S08)) !! ")";
+  IF LENGTH(S12) = 0 THEN S12 := "DBS";
+% IF (NOT BAS_REORGREQ) THEN
+%   IF LENGTH(S17) = 0 THEN ELSE                  % GARBAGE
+%     BAS_REORGREQ := TRUE;
+  IF LENGTH(S17) = 0 THEN
+    S17 := STRING(DAT,8);
+
+S := "DBA/FT/R01/" !! S02 !! "/" !! S17 !! "."; % JOB UPD SANS "CASE"
+REPLACE PJOB_TIT BY S;
+REPLACE WFLOW.TITLE BY PJOB_TIT;
+
+S := "DBA/FT/R02/" !! S02 !! "/" !! S17 !! "."; % "CASE" DU JOB UPD
+REPLACE PJOB_TIT BY S;
+REPLACE WFLWS.TITLE BY PJOB_TIT;
+
+S := "DBA/WF/R01/" !! S02 !! "/" !! S17 !! "."; % NOM DU JOB UPDATE
+REPLACE PJOB_TIT BY S;
+REPLACE WFLWR.TITLE BY PJOB_TIT;
+
+S := "DBA/FT/" !! S02 !! "/REOTXT.";     % NOM DU FICHIER DE TRANSFERT
+REPLACE PJOB_TIT BY S;
+REPLACE WDXFR.TITLE BY PJOB_TIT;
+
+S := "DBA/WF/R01/" !! S02 !! "/" !! S17 !! "/DELETE.";
+REPLACE PJOB_TIT BY S;                % DELETE REORG FILES
+REPLACE WFLDEL.TITLE BY PJOB_TIT;
+SEQNUM := 9999000; % RESET SEQUENCE NUMBER
+WWFLDEL("BEGIN JOB DBA/WF/R01/" !! S02 !! "/DELETE;");
+WWFLDEL("%%%%%%%%% DBA/WF/R01/" !! S02 !! "/" !! S17);
+% WWFLDEL("USER       = DBA/DBA;");
+% WWFLDEL("CHARGECODE = " !! S37 !! ";");
+  WWFLDEL(" STRING  MSG ;  ");
+  WWFLDEL(C(72));
+  WWFLDEL("%" !! B(70) !! "%");
+  WWFLDEL("%" !! B(10)!!"JOB MUST BE UNDER USERCODE DBA" !! B(30) !! "%"
+);
+  WWFLDEL("%" !! B(70) !! "%");
+  WWFLDEL(C(72));
+  WWFLDEL(" IF MYSELF(USERCODE) NEQ """DBA""" THEN ");
+  WWFLDEL("BEGIN");
+  WWFLDEL("MSG := """This job must be started under DBA user code. """ &
+");
+  WWFLDEL("       """Type """"""<mix> OK """""" to terminate. """ ;");
+  WWFLDEL("DISPLAY MSG;");
+  WWFLDEL("WAIT (OK);" );
+  WWFLDEL("GO TO ENDWFL;");
+  WWFLDEL("END;");
+WWFLDEL("    REMOVE (BBLP)DBA/PO/" !! SDBNAME !! "/= FROM BBLPR1;");
+WWFLDEL("    REMOVE (BBLP)DBS/PO/" !! SDBNAME !! "/= FROM BBLPR1;");
+WWFLDEL("    REMOVE (BBLP)DBA/LO/" !! SDBNAME !! "/= FROM BBLPR1;");
+WWFLDEL("    REMOVE (BBLP)DBS/LO/" !! SDBNAME !! "/= FROM BBLPR1;");
+WWFLDEL("    REMOVE (DBA)DBA/FT/OLD/" !! SDBNAME !! "/= FROM BBLPR1;");
+WWFLDEL("    REMOVE (DBA)REORGANIZATION/" !! SDBNAME
+            !! "/= FROM BBLPR1;");
+WWFLDEL("    IF FILE (DBA)DBA/PO/" !! SDBNAME !! "/OVERRIDE ON BBLPR1");
+WWFLDEL("        IS RESIDENT THEN");
+WWFLDEL("    BEGIN");
+WWFLDEL("        CHANGE (DBA)DBA/PO/" !! SDBNAME
+            !! "/OVERRIDE ON BBLPR1");
+WWFLDEL("            TO (DBA)DBA/SAVE/PO/" !! SDBNAME !! "/OVERRIDE;");
+WWFLDEL("        REMOVE (DBA)DBA/PO/" !! SDBNAME !! "/= FROM BBLPR1;");
+WWFLDEL("        CHANGE (DBA)DBA/SAVE/PO/" !! SDBNAME !! "/OVERRIDE"
+                                        " ON BBLPR1");
+WWFLDEL("            TO (DBA)DBA/PO/" !! SDBNAME !! "/OVERRIDE;");
+WWFLDEL("    END;");
+WWFLDEL("    REMOVE (DBA)WRAPPED/" !! SDBNAME !! " FROM BBLPR1;");
+WWFLDEL("    REMOVE (DBA)WRAPPED/" !! SDBNAME !! "/= FROM BBLPR1;");
+WWFLDEL("    REMOVE (DBA)DBA/WF/R01/" !! S02 !! " FROM BBLPR1;");
+WWFLDEL("    REMOVE (DBA)DBA/WF/R01/" !! S02 !! "/= FROM BBLPR1;");
+WWFLDEL("    REMOVE (DBA)DBA/WF/SDBNAME/" !! S02 !! " FROM BBLPR1;");
+WWFLDEL("    REMOVE (DBA)DBA/WF/SDBNAME/" !! S02 !! "/= FROM BBLPR1;");
+WWFLDEL("    REMOVE (DBA)DBA/WF/C01/" !! S02 !! " FROM BBLPR1;");
+WWFLDEL("    REMOVE (DBA)DBA/WF/C01/" !! S02 !! "/= FROM BBLPR1;");
+If BAS_AUDITED then
+  WWFLDEL("    REMOVE (OLDAUDIT)AUDIT/" !! SDBNAME !!
+                  "/= FROM " !! S04 !! ";");
+WWFLDEL ("ENDWFL :");
+WWFLDEL("? END JOB");
+LOCK(WFLDEL,CRUNCH);
+
+IF USEREORGDB AND SVDBAFTER THEN
+BEGIN
+   CREATEVERIFYDUMPWFL;
+END;
+
+IF LENGTH(S13S) > 0 THEN
+  S35 := "S" !! S13S
+  ELSE
+  S35 := "SLAB";
+
+UPDATE_HEADER(BAS_ReorgReq);
+
+IF SVDBBEFORE   THEN
+  BEGIN
+    S25:= "STEP10";
+    IF SVDBBEFOFF THEN
+      BEGIN
+        S30 := "OFF";
+        S36 := " OFFLINE";
+      END
+      ELSE
+      BEGIN
+        S30 := "ON";
+        S36 := EMPTY;
+      END;
+    IF (LENGTH(S13) = 0) OR (S13 = "STANDARD") THEN
+      BEGIN
+        S33 := S13P !! "S" !! S30 !! """ !! " & " !! S35;
+        IF S13C = "2" THEN
+          BEGIN
+            COPS := 2;
+            S34 := S13P !! "D" !! S30 !! """ !! " & " !! S35;
+          END;
+      END
+      ELSE
+        S33 := S13 !! """;
+    UPDATE_SAVEDB;
+  END;
+
+IF SVSTRUCT     THEN
+  BEGIN
+    PB := SAVSTRARY[0];
+    IF PB = " " FOR 810 THEN
+      SVSTRUCT := FALSE
+      ELSE
+      UPDATE_SAVESTR;
+  END;
+
+IF INITSTRUCT   THEN
+BEGIN
+    S25:= "STEP11";
+    PA := INISTRARY[378];
+    IF PA = " " FOR 378 THEN
+    ELSE
+    BEGIN
+        INITSTRBEF := TRUE;
+        UPDATE_INITSTR;
+    END;
+END;
+
+UPDATE_SAVESOFT;
+
+IF NEWSOFT THEN
+  UPDATE_NEWSOFT;
+
+IF NEWDATABRIDGE THEN
+  UPDATE_NEWDATABRIDGE;
+
+ WWFL(C(72));
+ WWFL("%" !! B(70) !! "%");
+ WWFL("%" !! B(29) !! "S T E P   3" !! B(30) !! "%");
+ WWFL("%" !! B(70) !! "%");
+ WWFL(C(72));
+ WWFL(" ");
+
+
+IF UPDCONTROL    THEN UPDATE_CONTROL;
+
+IF BAS_REORGREQ THEN UPDATE_REORG;
+
+INSTALL_MASTER_GUARD;
+
+IF INITSTRUCT AND NOT USEREORGDB THEN
+  BEGIN
+    S25:= "STEP33";
+    PA := INISTRARY[0];
+    IF PA = " " FOR 378 THEN
+      ELSE
+        BEGIN
+          INITSTRAFT := TRUE;
+          UPDATE_INITSTR;
+        END;
+  END;
+
+IF SVDBAFTER AND NOT SVDBAFTOFF THEN
+BEGIN   %If on-line dump install application software and enquiry first
+    IF NEWBYJOB THEN  UPDATE_NEWPROGS;
+
+    IF NEWINQ       THEN UPDATE_NEWINQ;
+%   IF NEWDARGAL    THEN UPDATE_NEWDARGAL;
+% DBA Usercode can no longer unrestrict files
+% Use Job mentioned in Planning DBA/WF/UNWRAP/BETA/TEMP
+  IOTA_DATABRIDGE;
+END;
+
+IF SVDBAFTER THEN
+BEGIN
+    IF SVDBAFTOFF THEN
+    BEGIN
+        S25 := "STEP34";
+        S30 := "OFF";
+        S36 := " OFFLINE";
+    END
+    ELSE
+    BEGIN
+        S25 := "STEP60";   %on-line dump goes last
+        S30 := "ON";
+        S36 := EMPTY;
+    END;
+    IF (LENGTH(S13) = 0) OR (S13 = "STANDARD") THEN
+    BEGIN
+        S33 := S13P !! "S" !! S30 !! """ !! " & " !! S35
+                   !! " & " !! """ !! "AF " !! """;
+        IF S13C = "2" THEN
+        BEGIN
+            COPS := 2;
+            S34 := S13P !! "D" !! S30 !! """ !! " & " !! S35
+                   !! " & " !! """ !! "AF " !! """;
+        END;
+    END
+    ELSE
+        S33 := S13 !! """;
+    UPDATE_SAVEDB;
+END;
+
+IF NOT (SVDBAFTER AND NOT SVDBAFTOFF) THEN
+BEGIN   %If off-line dump install application software and enquiry last
+    IF NEWBYJOB THEN  UPDATE_NEWPROGS;
+
+    IF NEWINQ       THEN UPDATE_NEWINQ;
+%   IF NEWDARGAL    THEN UPDATE_NEWDARGAL;
+% DBA Usercode can no longer unrestrict files
+% Use Job mentioned in Planning DBA/WF/UNWRAP/BETA/TEMP
+    IOTA_DATABRIDGE;
+END;
+
+IF USEREORGDB THEN
+BEGIN
+   WWFL(" ");
+   WWFL("REMOVE *DESCRIPTION/" !! SDBNAME !! "/" !! S29C );
+   WWFL("       ,(DBA)DESCRIPTION/" !! SDBNAME !! "/" !! S29C );
+   WWFL("       FROM " !! S07 !! ";");
+   WWFL(" ");
+%
+   WWFL(" ");
+   IF SVDBAFTER THEN
+   BEGIN
+      WWFL("STARTJOB DBA/WF/R01/" !! S02 !! "/VERIFYDUMP("
+            !! """ !! "DB = " !! SDBNAME !! " ON " !! S05
+            !! " " !! """ !! " & ");
+      WWFL("    " !! """ !! " OPTIONS (WORKERS= " !! """
+            !! " & " !! SDUW !! " & " !! """ !! ")" !! """);
+      WWFL(" & " !! """ !! " VERIFYDUMP " !! S33 !! ");");
+      WWFL("STARTTIME = + 00:30;");
+   END
+END;
+
+UPDATE_TRAILER(BAS_ReorgReq);
+
+LOCK(WFLOW,CRUNCH);
+LOCK(WFLWS,CRUNCH);
+
+MERGE(WFLWR,CMP,15,WFLOW,WFLWS);
+
+WFLOW.OPEN := TRUE; CLOSE(WFLOW,PURGE);
+WFLWS.OPEN := TRUE; CLOSE(WFLWS,PURGE);
+WFLWR.MYUSE := 3; WFLWR.OPEN := TRUE; LOCK(WFLWR,CRUNCH);
+
+IF GENWDXFER THEN
+BEGIN
+    REPLACE PXFR1 BY " " FOR 17 WORDS;
+    REPLACE PXFR2 BY " " FOR 17 WORDS;
+
+    REPLACE PXFR1:PXFR1 BY "UTYPE,DBNAME,APPLNAME";
+    IF BAS_REORGREQ THEN
+      REPLACE PXFR2:PXFR2 BY "REORGANISATION"
+    ELSE
+      REPLACE PXFR2:PXFR2 BY "UPDATE";
+    REPLACE PXFR2:PXFR2 BY ",",SDBNAME;
+    REPLACE PXFR2:PXFR2 BY ",",S02;
+
+    SETREO("S10",SVDBBEFORE);
+    SETREO("SVS",SVSTRUCT);
+    SETREO("S11",INITSTRBEF);
+
+    SETREO("S12",TRUE);
+    SETREO("S13",TRUE);
+    SETREO("S14",TRUE);
+    SETREO("S15",TRUE);
+    SETREO("S16",TRUE);
+
+    SETREO("S21",NEWSOFT);
+    SETREO("S22",NEWSOFT);
+    SETREO("S23",NEWSOFT);
+    SETREO("S24",NEWSOFT);
+
+    SETREO("S31",UPDCONTROL);
+    SETREO("S32",BAS_REORGREQ);
+    SETREO("S33",INITSTRAFT);
+
+    SETREO("S34",SVDBAFTER AND SVDBAFTOFF);
+%    SETREO("S39",TRUE);
+    SETREO("S4x",NEWBYJOB);
+    SETREO("S5x",NEWINQ);
+    SETREO("SDB",NEWDATABRIDGE);
+    SETREO("S60",SVDBAFTER AND NOT SVDBAFTOFF);
+
+    WRITE(WDXFR,17,AXFR1);
+    WRITE(WDXFR,17,AXFR2);
+    LOCK(WDXFR,CRUNCH);
+    DISPLAY("OK");
+END;
+
+IF NOT GENWFLRES THEN GO TO EOJ;
+
+WFLOW.FILETYPE := 7;
+S := "DBA/WF/S01/" !! S02 !! "/" !! S17 !! ".";% NOM DU JOB UPDATE
+REPLACE PJOB_TIT BY S;
+REPLACE WFLOW.TITLE BY PJOB_TIT;
+SEQNUM := 9999000; % RESET SEQUENCE NUMBER
+RESTORE_HEADER;
+
+IF SVSTRUCT THEN
+  RESTORE_SAVESTR
+  ELSE
+  RESTORE_SAVEDB;
+
+RESTORE_TRAILER;
+
+LOCK(WFLOW,CRUNCH);
+  DISPLAY("SPCIP = " !! SPCIP);
+  DISPLAY("SSERVER = " !! SSERVER);
+  REPLACE EA BY "STARTJOB (DBA0)DBA/WF/RFCUPDATE ON BBLTS3"
+      ,"(",""",SDBNAME,""",",",""","600,"
+      ,80"A" FOR 1, """
+      ,",",""",SRFC, """
+      ,",",""",SPCIP,"""
+      ,",",""",SSERVER,"""
+      ,");"
+      ,48"00";
+  DISPLAY(EA);
+  ZIP WITH EA;
+EOJ : END.

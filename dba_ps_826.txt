@@ -1,0 +1,753 @@
+% VERSION  7.1   ; SAVED 20201019 13:16:08                    |LSC
+%
+%                     DCCCXXVI
+%                       _____
+%                      / \   \
+%                     /   \   \
+%                    /     \   \
+%                   /  / \  \   \
+%                  /  /  /\  \   \
+%                 /  /  /  \  \   \
+%                /  /  /    \  \   \
+%               /  /  /      \  \   \
+%              /  /  /___________\   \
+%             /  /  /_________________\
+%             \ /                     /
+%              \_____________________/
+%
+%
+%----------------------------------------------------------------------%
+% Execute VDBS commands to change ALLOWEDCOER and MEMORY RESIDENT.     %
+% The values informed are checked with the current ones to avoid change%
+%   to a lower value.                                                  %
+% Exemple :                                                            %
+% RUN DBA/PO/823 ("DB=(BDA)BDBA ON BBLSYS <VDBS COMMANDS>")            %
+% Parameters :                                                         %
+% DB = <usercode> DBNAME <localization of the control file>            %
+% <vdbs commands> = ALLOWECORE and MEMORY RESIDENT                     %
+%                                                                      %
+% RUN DBA/PO/823 ("DB=(BDA)BDBA ON BBLSYS                              %
+%                  ALLOWEDCORE=1000000 MEMORY RESIDENT=200000          %
+%----------------------------------------------------------------------%
+$$   SET LEVEL 2
+$$   SET LIST
+$SET TADS
+%----------------------------------------------------------------------%
+PROCEDURE DB_OPENING(PPARAM);
+ARRAY                PPARAM[*];
+
+ BEGIN
+  EBCDIC ARRAY
+     DBNAME [0:99]
+    ;
+  ARRAY
+     A
+    ,ADMINQ26    [0:799]
+    ,ADMI        [0:2]
+    ,AMSG         [0:100]
+    ,GCSTRUCTURE [0:100,0:3]   %array to store each structure defined
+    ;
+  POINTER
+     PTA
+    ,PTADMI
+    ,PAMSG
+    ;
+  INTEGER
+     LNA
+    ,LNA26
+    ,VERIFY_TWO_CONTROL_POINTS_MESSAGE
+    ,NBR_STRS         %nbr of structures to process
+    ,ISTRUCTURE
+    ,IHI
+    ,MAX_NBR_STRS
+    ,ALLOWEDCORE
+    ,MEMORY_RESIDENT
+    ,P_ALLOWEDCORE
+    ,P_MEMORY_RESIDENT
+    ,VALUE_DMINQ
+    ;
+
+  BOOLEAN
+     PRIVUSER        % true if usercode running programme is priviledged
+    ,FIRSTGC
+    ,BOOLEANHI
+    ;
+  LIBRARY
+     DMSUPPORT
+    ;
+  STRING
+     DB_USERCODE
+    ,DB_NAME
+    ,DB_FAMILY
+    ,DB_PREFIX
+    ,DMSUPPORT_TITLE
+    ,DB_TITLE
+    ,DMI_USER
+    ,DMI_TITLE
+    ,DMI_FAMILY
+    ,LOADF
+    ;
+  REAL
+     CF_AFNLOC
+    ;
+  DEFINE
+     VALCHRA = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"#
+    ;
+  LABEL
+     EOJ
+    ;
+%
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%
+$$ INCLUDE DMISYM = "DATABASE/DMS591/DMINTERPRETER" 20100000-20199999
+
+BOOLEAN
+  RSLT;
+
+%
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%
+EPILOG PROCEDURE ENDOFROUTINE;
+BEGIN
+    ARRAY MSG[0:9];
+    IF NOT (MYSELF.HISTORYCAUSE EQL 2 AND
+       MYSELF.HISTORYTYPE EQL 4) AND
+       MYSELF.HISTORYCAUSE > 0 THEN
+    BEGIN
+       MYSELF.TASKVALUE:=9;
+       REPLACE POINTER(MSG) BY
+           "HISTORYCAUSE=", STRING(MYSELF.HISTORYTYPE,*);
+       REPLACE MYSELF.TASKSTRING BY POINTER(MSG);
+    END;
+END;
+%
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%
+
+PROCEDURE SCANTITLE(SX,SY);
+VALUE  SX;
+STRING SX, SY;
+
+BEGIN
+
+  DEFINE VALCHR  = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890/"#;
+  LABEL  EXIT;
+
+  SX := TAIL(SX," ");
+  IF LENGTH(SX) < 1 THEN
+    BEGIN
+      SY := "DISK";
+      GO EXIT;
+    END;
+  SY := HEAD(SX,NOT " ");
+  IF LENGTH(SX) = LENGTH(SY) THEN
+    BEGIN
+      SY := "DISK";
+      GO EXIT;
+    END;
+  SX := TAIL(DROP(SX,LENGTH(SY))," ");
+  IF LENGTH(HEAD(SX,VALCHR)) = 2 THEN
+    IF TAKE(HEAD(SX,VALCHR),2) = "ON" THEN
+        SY  := HEAD(TAIL(DROP(SX,2)," "),VALCHR);
+
+EXIT :
+
+END OF SCANTITLE;
+%
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%
+PROCEDURE EXCEPTIONHANDLER;
+BEGIN
+  STRING
+    EXCEPTIONMSG;
+  BOOLEAN
+    STATUSRSLT;
+  ARRAY MSG[0:100];
+
+
+    STATUSRSLT := DBSTATUS;
+    DBEXCEPTIONNAME(STATUSRSLT, EXCEPTIONMSG);
+    DISPLAY("EXCEPTION-NAME = " !! EXCEPTIONMSG);
+    DBEXCEPTIONTEXT(STATUSRSLT, EXCEPTIONMSG);
+    DISPLAY("EXCEPTION-TEXT = ");
+    DISPLAY(EXCEPTIONMSG);
+
+    MYSELF.TASKVALUE:=4;
+    REPLACE POINTER(MSG) BY  EXCEPTIONMSG, 48"00";
+    REPLACE MYSELF.TASKSTRING BY
+                POINTER(MSG);
+    MYSELF.STATUS:=-1;
+
+END OF EXCEPTIONHANDLER;
+%
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%
+PROCEDURE MONITOR_SUPPORT (MONITOR, DBTITLE);
+  STRING                            DBTITLE ;
+  PROCEDURE                MONITOR
+           (DBOPTIONSWORD, MAXSTRUCTURENUMBER, DMINQ);
+    VALUE   DBOPTIONSWORD, MAXSTRUCTURENUMBER;
+    BOOLEAN DBOPTIONSWORD;
+    REAL                   MAXSTRUCTURENUMBER;
+    BOOLEAN PROCEDURE DMINQ (A);
+      ARRAY                  A [0];
+      FORMAL;
+  FORMAL;
+  LIBRARY DMSUPPORT;
+%
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%
+BOOLEAN PROCEDURE GET_DMSUPPORT_TITLE (A_PARAM, DMSUPPORT_TITLE);
+ARRAY A_PARAM [0];
+STRING DMSUPPORT_TITLE;
+
+BEGIN
+
+$$ INCLUDE DMCONTROL = "DATABASE/DMS591/DMCONTROL" 10000000-14999999
+
+ARRAY
+   CFA [0:CFPHYSICALSIZE-1],
+   CFTITLE [0:99],
+   A_VALUE[0:4];
+
+FILE
+   CF (KIND=DISK, FILETYPE=7);
+
+INTEGER NRCHAR;
+
+REAL
+   CFTEXTENT,
+   CFDIRDESC;
+
+   EBCDIC ARRAY
+      E_PARAM [0] = A_PARAM;
+   TRANSLATETABLE UPPERCASE
+      (EBCDIC TO EBCDIC,
+       "abcdefghijklmnopqrstuvwxyz" TO "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+   %
+   %- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -%
+   %
+   BOOLEAN PROCEDURE PARSE_DBCLAUSE;
+
+   BEGIN
+      STRING
+         S,
+         S1,
+         ID,
+         PARTYPE;
+
+      BOOLEAN
+         QUOTED;
+
+      LABEL
+         EXIT;
+
+      OUTPUTMESSAGE ARRAY IN_ERROR (
+      ENGLISH (
+        1 = "'DB' EXPECTED SCANNING: ",
+        2 = "'=' EXPECTED SCANNING: ",
+        3 = "')' EXPECTED SCANNING: ",
+        4 = "INVALID IDENTIFIER SCANNING: ",
+        5 = "'ALLOWEDCORE OR RESIDENT LIMIT' EXPECTED SCANNING: ",
+        9 = "WRONG DMS ATTRIBUTE :" )
+        );
+      %
+      %- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+      %
+      PROCEDURE ERR (N);
+      VALUE N; REAL N;
+
+      BEGIN
+         EBCDIC ARRAY
+            A [0:LENGTH (S) + 50];
+
+         REAL
+            LEN;
+
+         MESSAGESEARCHER (IN_ERROR [N], A, LEN);
+         REPLACE A [LEN] BY S,48"00";
+         DISPLAY (A);
+         PARSE_DBCLAUSE := TRUE;
+         MYSELF.TASKVALUE:=N;
+        % REPLACE MYSELF.TASKSTRING BY A;
+
+      END;
+      %
+      %- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+      %
+      BOOLEAN PROCEDURE GETID;
+
+      BEGIN
+         QUOTED := FALSE;
+         IF TAKE (S, 1) = """ THEN
+           BEGIN
+             QUOTED := TRUE;
+             S := DROP (S, 1);
+             ID := HEAD (S, NOT """);
+           END
+           ELSE
+             ID := HEAD (S, "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890-");
+             IF LENGTH (ID) = 0 OR LENGTH (ID) > 17 THEN
+               BEGIN
+                 ERR (4);
+                 GETID := TRUE;
+               END;
+      END;
+
+      SCAN POINTER(A_PARAM) FOR NRCHAR:200 UNTIL EQL 48"00";
+      NRCHAR:=200-NRCHAR;
+
+      S := STRING (A_PARAM, NRCHAR);
+      S := TRANSLATE(S, UPPERCASE);
+
+      S := TAIL (S, " ");
+      IF TAKE (S, 2) NEQ "DB" THEN
+        BEGIN
+          ERR (1);
+          GO EXIT;
+        END;
+      S := DROP (S, 2);
+
+      S := TAIL (S, " ");
+      IF TAKE (S, 1) NEQ "=" THEN
+        BEGIN
+          ERR (2);
+          GO EXIT;
+        END;
+      S := DROP (S, 1);
+
+      S := TAIL (S, " ");
+      IF TAKE (S, 1) = "*" THEN
+        BEGIN
+          S := DROP (S, 1);
+          S := TAIL (S, " ");
+          DB_USERCODE := "*";
+        END
+        ELSE
+          IF TAKE (S, 1) = "(" THEN
+            BEGIN
+              S := DROP (S, 1);
+              S := TAIL (S, " ");
+              IF GETID THEN GO EXIT;
+              IF QUOTED THEN
+                DB_USERCODE := "(" !! """ !! ID !! """ !! ")"
+                ELSE
+                DB_USERCODE := "(" !! ID !! ")";
+                S := TAIL (S, NOT ")");
+                IF LENGTH (S) > 0 THEN
+                  IF TAKE (S, 1) NEQ ")" THEN
+                    BEGIN
+                      ERR (3);
+                      GO EXIT;
+                    END
+                    ELSE
+                  ELSE
+                    BEGIN
+                      ERR (3);
+                      GO EXIT;
+                    END;
+                S := DROP (S, 1);
+                S := TAIL (S, " ");
+            END;
+          IF GETID THEN GO EXIT;
+          IF QUOTED THEN
+              DB_NAME := """ !! ID !! """
+            ELSE
+              DB_NAME := ID;
+          S := TAIL (S, NOT " ");
+          S := TAIL (S, " ");
+          IF LENGTH (S) > 2 THEN
+            IF TAKE (S, 2) = "ON" THEN
+              BEGIN
+                S := DROP (S, 2);
+                S := TAIL (S, " ");
+                IF GETID THEN GO EXIT;
+                IF QUOTED THEN
+                    DB_FAMILY := """ !! ID !! """
+                  ELSE
+                    DB_FAMILY := ID;
+              END;
+          IF LENGTH (DB_FAMILY) = 0 THEN
+            DB_FAMILY := "DISK";
+          DB_PREFIX := DB_USERCODE !! DB_NAME !! "/";
+
+          S := DROP( S, LENGTH(ID));
+          S := TAIL (S, " ");
+          IF (LENGTH (S) < 3) THEN
+          BEGIN
+              ERR(5);
+              GO EXIT;
+          END;
+          IF
+             (TAKE (S, 11) NEQ "ALLOWEDCORE" AND
+              TAKE (S, 8) NEQ "RESIDENT" ) THEN
+            BEGIN
+              ERR(5);
+              GO EXIT;
+            END;
+
+
+          WHILE LENGTH (S) > 0 DO
+            BEGIN
+
+                IF (LENGTH (S) < 3) THEN
+                BEGIN
+                    GO EXIT;
+                END;
+
+                IF (TAKE (S, 11) EQL "ALLOWEDCORE" ) THEN
+                BEGIN
+                   S := DROP (S, 11);
+                   S := TAIL (S, " ");
+                   PARTYPE:="A";
+                END
+                ELSE
+                BEGIN
+                   S := DROP (S, 8);
+                   S := TAIL (S, " ");
+                   IF (TAKE (S, 5) NEQ "LIMIT" ) THEN
+                   BEGIN
+                     ERR(9);
+                     GO EXIT;
+                   END;
+                   S := DROP (S, 5);
+                   S := TAIL (S, " ");
+                   PARTYPE:="M";
+                END;
+
+                IF (LENGTH (S) < 3) OR (TAKE (S, 1) NEQ "=") THEN
+                  BEGIN
+                    ERR(2);
+                    GO EXIT;
+                  END;
+
+                S := DROP (S, 1);
+                IF LENGTH (S) = 0 THEN
+                  BEGIN
+                    ERR(6);
+                    GO EXIT;
+                  END;
+                ID:=HEAD(S,NOT " ");
+                IF PARTYPE EQL "A" THEN
+                BEGIN
+                  REPLACE POINTER(A_VALUE) BY ID;
+                  P_ALLOWEDCORE:=INTEGER(POINTER(A_VALUE),LENGTH(ID));
+ %                 DISPLAY("ALLOWEDCORE=" CAT
+ %                         STRING(P_ALLOWEDCORE,*));
+                END;
+                IF PARTYPE EQL "M" THEN
+                BEGIN
+                  REPLACE POINTER(A_VALUE) BY ID;
+                  P_MEMORY_RESIDENT:=
+                            INTEGER(POINTER(A_VALUE),LENGTH(ID));
+%                  DISPLAY("MEMORY RESIDENT=" CAT
+%                          STRING(P_MEMORY_RESIDENT,*));
+                END;
+                S:=DROP(S, LENGTH(ID));
+                S := TAIL (S, " ");
+            END;
+
+         PARSE_DBCLAUSE:=FALSE;
+   EXIT:
+
+   END;
+
+   IF NOT GET_DMSUPPORT_TITLE := PARSE_DBCLAUSE THEN
+     BEGIN
+       REPLACE CFTITLE BY DB_PREFIX, "CONTROL ON ", DB_FAMILY, ".";
+       REPLACE CF.TITLE BY CFTITLE;
+       READ (CF, CFPHYSICALSIZE, CFA);
+       CF_AFNLOC := CFA [CFAFNLOC];
+       CFDIRDESC := CFA [CFTEXTDIRDESCLOC];
+       READ (CF [CFDIRDESC.CFSTARTF], CFPHYSICALSIZE, CFA);
+       CFTEXTENT :=
+         CFA [MASKSEARCH (0 & CFDMSUPPORTNAMETEXT CFNUMF,
+                          0 & REAL (NOT FALSE) CFNUMF,
+                          CFA [CFDIRDESC.CFENTRIESF-1])];
+       READ (CF [CFTEXTENT.CFBAF], CFPHYSICALSIZE, CFA);
+       DMSUPPORT_TITLE :=
+         STRING (POINTER (CFA [CFTEXTENT.CFWAF+1]),
+                 CFA [CFTEXTENT.CFWAF]);
+     END
+     ELSE
+     BEGIN
+
+     END;
+
+END GET_DMSUPPORT_TITLE;
+
+%
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%
+  BOOLEAN PROCEDURE CHECKERROR;
+  BEGIN
+      INTEGER I;
+      POINTER P;
+
+      P:=POINTER(ADMINQ26);
+      CHECKERROR:=FALSE;
+      IF POINTER(ADMINQ26) EQL "**ERROR"
+           FOR 7 THEN
+      BEGIN
+         CHECKERROR:=TRUE;
+         MYSELF.TASKVALUE:=2;
+         REPLACE MYSELF.TASKSTRING BY
+                        P  ;
+      END;
+
+  END;
+
+%
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%
+PROCEDURE MONITOR(DBOPTIONSWORD, MAXSTRUCTURENUMBER, DMINQ);
+  VALUE           DBOPTIONSWORD, MAXSTRUCTURENUMBER        ;
+  BOOLEAN         DBOPTIONSWORD                            ;
+  REAL                           MAXSTRUCTURENUMBER        ;
+  BOOLEAN PROCEDURE                                  DMINQ(A);
+    ARRAY                                                  A[0]; FORMAL;
+
+BEGIN
+
+    LABEL
+       EXIT;
+%
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%
+   PROCEDURE INITIALIZE;
+
+   BEGIN
+   DEFINE FORCESEGMENT = #;
+   MYSELF.OPTION := 0;
+   PRIVUSER := BOOLEAN
+      (USERDATA (2, MYSELF, USERDATALOCATOR ("PU"), 0, 0).[46:1]);
+%   IF NOT PRIVUSER THEN
+%      MYSELF.STATUS := VALUE(TERME_PARAMTED);
+   MYSELF.OPTION := 0
+      & 1[1:1]                % FAULT
+      & 1[2:1]                % DSED
+%     & 1[7:1]                % BASE
+      & 1[8:1]                % ARRAYS
+%     & 1[9:1]                % CODE
+%     & 1[10:1]               % FILES
+%     & 1[15:1]               % DBS
+      ;
+
+   END INITIALIZE;
+
+%
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%
+   BOOLEAN PROCEDURE GETVALUES(PAR, TEXT);
+   ARRAY PAR[*];
+   STRING TEXT;
+   BEGIN
+     POINTER P1, P2;
+     STRING WORD;
+     ARRAY A[0:30],
+           B[0:30],
+           RES[0:799];
+     INTEGER I;
+     LABEL EXIT_GETVALUES;
+
+     REPLACE POINTER(B) BY " " FOR 30 WORDS;
+     REPLACE POINTER(B) BY TEXT ;
+
+     REPLACE POINTER(RES) BY POINTER(PAR[1]) UNTIL EQL 48"00";
+     P1:=POINTER(RES);
+    % DISPLAY(P1);
+     WHILE P1 NEQ 48"00" DO
+     BEGIN
+         REPLACE POINTER(A) BY " " FOR 30 WORDS;
+         I:=LENGTH(TEXT);
+         REPLACE POINTER(A)  BY P1:P1 UNTIL EQL 48"0D";
+         IF POINTER(A) EQL POINTER(B) FOR I THEN
+         BEGIN
+             GETVALUES:=TRUE;
+             P2:=POINTER(A) + I;
+             I:=15;
+             SCAN P2 FOR I:I UNTIL EQL ",";
+             VALUE_DMINQ:=INTEGER(P2,15-I);
+             GO EXIT_GETVALUES;
+         END;
+         P1:=P1+1;
+     END;
+     GETVALUES:=FALSE;
+
+     EXIT_GETVALUES:
+
+   END;
+
+%
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%
+   PROCEDURE CHECK_CURRENT_VALUES;
+   BEGIN
+       ARRAY MSG[0:20];
+       POINTER PMSG;
+       INTEGER ERRORS;
+
+       ISTRUCTURE:=0;
+       REPLACE MSG BY 48"00" FOR SIZE(MSG) WORDS;
+
+       REPLACE A BY 48"00" FOR SIZE(A) WORDS;
+       A[0]:= 26;  % VISIBLE DBS
+
+       REPLACE A[1] BY "STATUS ", 48"00";
+       %DISPLAY(POINTER(A[1]));
+       DMINQ(A);
+       PTA := POINTER(A[1]);
+
+       GETVALUES(A, "CORE TOTAL:ALLOWED=");
+       ALLOWEDCORE:=VALUE_DMINQ;
+
+       IF P_ALLOWEDCORE = 9999999999 THEN
+          P_ALLOWEDCORE:=ALLOWEDCORE;
+
+       GETVALUES(A, "RESIDENT TOTAL:ALLOWED=");
+       MEMORY_RESIDENT:=VALUE_DMINQ;
+
+       IF P_MEMORY_RESIDENT = 9999999999 THEN
+          P_MEMORY_RESIDENT:=MEMORY_RESIDENT;
+
+       %DISPLAY(PTA);
+
+   END;
+
+%
+%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - %
+%
+%
+%
+%
+%----------------------------------------------------------------------%
+%
+%                    ---- MONITOR START ----
+%
+INITIALIZE;
+
+%
+
+RSLT := DBOPEN("UPDATE"); %% OPEN UPDATE TO CHECK OFFLINE DUMP
+                          %% AND TO FORCE TWO CONTROL POINTS ON CLOSE
+IF RSLT THEN
+  BEGIN
+    EXCEPTIONHANDLER;
+    GO EXIT;
+  END;
+%
+
+CHECK_CURRENT_VALUES;
+
+IF P_ALLOWEDCORE < P_MEMORY_RESIDENT THEN
+BEGIN
+    DISPLAY("NEW MEMORY RESIDENT IS HIGHER THAN NEW ALLOWEDCORE");
+    DISPLAY("ALLOWEDCORE=" CAT
+             STRING(P_ALLOWEDCORE,*) CAT
+            ", RESIDENT LIMIT=" CAT
+            STRING(P_MEMORY_RESIDENT,*));
+    MYSELF.TASKVALUE:=11;
+    MYSELF.STATUS:=-1;
+END;
+
+IF P_ALLOWEDCORE = ALLOWEDCORE OR
+   P_MEMORY_RESIDENT = MEMORY_RESIDENT THEN
+BEGIN
+    DISPLAY("NEW VALUES ARE EQUAL OLD VALUES");
+    DISPLAY("CURRENT ALLOWEDCORE=" CAT
+             STRING(ALLOWEDCORE,*) CAT
+            ", NEW ALLOWEDCORE=" CAT
+            STRING(P_ALLOWEDCORE,*));
+    DISPLAY("CURRENT RESIDENT LIMIT=" CAT
+             STRING(MEMORY_RESIDENT,*) CAT
+            ", NEW RESIDENT LIMIT=" CAT
+             STRING(P_MEMORY_RESIDENT,*) );
+    MYSELF.TASKVALUE:=13;
+    MYSELF.STATUS:=-1;
+END;
+
+IF P_ALLOWEDCORE < ALLOWEDCORE OR
+   P_MEMORY_RESIDENT < MEMORY_RESIDENT THEN
+BEGIN
+    DISPLAY("NEW VALUES MUST BE HIGHER THAN OLD VALUES");
+    DISPLAY("CURRENT ALLOWEDCORE=" CAT
+             STRING(ALLOWEDCORE,*) CAT
+            ", NEW ALLOWEDCORE=" CAT
+            STRING(P_ALLOWEDCORE,*));
+    DISPLAY("CURRENT RESIDENT LIMIT=" CAT
+             STRING(MEMORY_RESIDENT,*) CAT
+            ", NEW RESIDENT LIMIT=" CAT
+             STRING(P_MEMORY_RESIDENT,*) );
+    MYSELF.TASKVALUE:=12;
+    MYSELF.STATUS:=-1;
+END;
+
+IF (P_ALLOWEDCORE * 0.8) < P_MEMORY_RESIDENT THEN
+BEGIN
+    DISPLAY("NEW MEMORY RESIDENT MUST BE A MAXIMUM " CAT
+              "OF 80% OF THE NEW ALLOWEDCORE");
+    DISPLAY("ALLOWEDCORE=" CAT
+             STRING(P_ALLOWEDCORE,*) CAT
+            ", RESIDENT LIMIT=" CAT
+            STRING(P_MEMORY_RESIDENT,*));
+    MYSELF.TASKVALUE:=15;
+    MYSELF.STATUS:=-1;
+END;
+
+
+REPLACE POINTER(AMSG) BY 48"00" FOR  100 WORDS;
+%
+
+REPLACE A BY 48"00" FOR SIZE(A) WORDS;
+A[0]:= 26;  % VISIBLE DBS
+
+DISPLAY(" NEW VALUES: ALLOWEDCORE=" CAT
+             STRING(P_ALLOWEDCORE,*) CAT
+            ", RESIDENT LIMIT=" CAT
+            STRING(P_MEMORY_RESIDENT,*));
+
+REPLACE A[1] BY
+             "ALLOWEDCORE=",STRING(P_ALLOWEDCORE,*),
+             ",RESIDENT LIMIT=",STRING(P_MEMORY_RESIDENT,*),
+             48"00";
+ %DISPLAY(POINTER(A[1]));
+DMINQ(A);
+
+RSLT := DBCLOSE;     %this close force two cp allowing change the
+                     %  temporary files to final str files
+IF RSLT THEN
+  EXCEPTIONHANDLER;
+
+EXIT :
+
+END MONITOR;
+
+%%%%%%%%%%%%%%%%%%%%%%%%   OUTER BLOCK  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%MYSELF.DISPLAYONLYTOMCS := TRUE;
+
+MYSELF.TASKVALUE:=0; %clean taskvalue to be used in errors logic
+P_ALLOWEDCORE:=9999999999;
+P_MEMORY_RESIDENT:=9999999999;
+
+IF NOT GET_DMSUPPORT_TITLE (PPARAM, DMSUPPORT_TITLE) THEN
+  BEGIN
+    DMSUPPORT.TITLE := DMSUPPORT_TITLE;
+    DB_TITLE := DB_USERCODE !! DB_NAME !! " ON " !! DB_FAMILY;
+    SCANTITLE(DMSUPPORT_TITLE,DMI_FAMILY);
+    DMI_TITLE := "DMINTERPRETER/" !! DB_NAME !! " ON " !! DMI_FAMILY;
+
+%    DMI_TITLE := DB_USERCODE !! DMI_TITLE;
+    DMI.TITLE := DMI_TITLE;
+%    DISPLAY(DMI_TITLE);
+    MONITOR_SUPPORT (MONITOR, DB_TITLE);
+  END
+  ELSE
+    MYSELF.STATUS:=-1;
+
+EOJ :
+%  DISPLAY(STRING(CF_AFNLOC,*));
+
+END.
+
+

@@ -1,0 +1,1670 @@
+$SET TADS  LEVEL 2
+
+Procedure Audit_reader(PAR_ARR);
+  ARRAY  PAR_ARR[*];
+
+%Procedure Audit_reader1( usr, datadb, apck, auditno, to_share);
+%Array  usr, datadb, apck[*];
+%Integer auditno;
+%Boolean to_share;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% This program needs 4 parameters
+% usr       The usercode of the database including the parenthesis
+%           Example (USERCODE)
+% datadb    The database name
+% apck      The pack the audits are on
+% auditno   The auditfile number to extract
+% to_share  If you want to write the output file to a share
+% You also need a configuration file per database.
+% The name will be CONFIG/<datab> the database name and preferable
+% under the usercode of the database and on the database pack
+% Lines starting with % will be ignored
+% The data set name should start in column 1 followed by one or more
+% spaces followed by the structure number which can be found in the
+% DASDL compile listing
+% The output file(s) are named DBA/<datadb>/AUDIT/<afn>/xx
+% History
+%2018-07-22
+% The original source was delivered by engineering(John Ticehurst).
+%2018-12-06
+% Took out the dependences of the database and via a config file the
+% program can be used for every database
+%2019-01-16 be
+%Make it possible to write to a share on the sql server
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+begin
+
+$include "*DATABASE/DMS591/PROPERTIES" 38100000 - 38576000
+$include "*DATABASE/DMS591/PROPERTIES" 83000000 - 83999999
+$include "*DATABASE/DMS591/PROPERTIES" 20000000 - 24999999
+$include "*DATABASE/DMS591/PROPERTIES" 30000000 - 31999999
+
+Boolean to_share;
+Array  usr, datadb, apck[0:3];
+Integer auditno;
+
+%--------------------------------------------
+FILE
+    FDBA(KIND=DISK,MAXRECSIZE=256,BUFFERS=5);
+
+LONG ARRAY
+    BL0_ARR[0: 0],              % BLOCK ZERO
+    BLB_ARR[0: 0];              % BLOCK DATA BASE
+
+DEFINE
+    NODEBLOCK = 47:16 #,        % NODE: NUMERO DE BLOCK
+    NODESTRLS = 31:16 #,        % NODE: INDICE ADDR LIST
+    NODEPROLS = 15:16 #;        % NODE: INDICE ADDR LIST
+
+DEFINE
+    PT = POINTER #,
+    RP = REPLACE #;
+
+DEFINE SEP = "~" #;
+
+INTEGER MAXRECSIZEF,
+        RECORDCNT,
+        DSCRBCNT,
+        DSDRBCNT,
+        DSMRBCNT,
+        DSCCNT,
+        DSDCNT,
+        DSMCNT;
+
+INTEGER
+    INT1,
+    NA,
+    NB,
+    NW,
+    SEQ_NUM,
+    OUT_ADD,
+    NOF_DIC,
+    RED_ADD,                  % ADRESSE DESCRIPTION FILE
+    RED_REC,                  % NOMBRE RECORDS D'UN BLOCK
+    RED_LEN,                  % LONGUEUR D'UN BLOCK
+    RED_IDX,                  % POSITION D'UN BLOCK
+    RED_KDX,                  % INDICE BOUCLE BLOCK
+    WRD_ADD,                  % INDICE DANS UN BLOCK
+    TXT_BAS,                  % INDICE DEBUT TEXTE DATA BASE
+    NOF_BLK,                  % NOMBRE DE BLOCKS
+    BLB_TXT,                  % BASE TEXT BLOCK
+    BEG_BLK,                  % INDICE DEBUT ADD BLOCK
+    BLK_DBA,                  % NUMERO BLOCK DATA BASE       G
+    LST_DBA,                  % DEBUT LISTE DATA BASE        G
+    PRP_DBA,                  % DEBUT PROPERTIES DATA BASE   G
+    NOF_STR,                  % NOMBRE DE STRUCTURES         G
+    NOF_CHR;                  % NOMBRE DE CARACTERES
+
+
+INTEGER
+        N,                              % COMPTEUR
+        INXS,                           % INDICE DE BOUCLE STRUCTURE
+        ACR_LN,                         % LONGUEUR NOM DES ACR
+        CMT_LN,                         % LONGUEUR DU COMMENTAIRE
+        DAS_ADD,                        % ADRESSE DISK DESCRIPTION
+        OLD_BST,                        % DERNIER BLOCK STRUCTURE LU
+        BLK_DBS,                        % NUMERO BLOCK DATA BASE
+        BLK_STR,                        % NUMERO BLOCK STRUCTURE
+        STR_ADD,                        % INDICE LISTE
+        BEG_LST,                        % INDICE DEBUT LISTE
+        BEG_STR,                        % INDICE DEBUT STRUCTURE
+        BEG_DBS,                        % INDICE DEBUT LISTE DATA BASE
+        BL0_TXT,                        % DEBUT TEXTE BLOCK ZERO
+        BLS_TXT,                        % DEBUT TEXTE BLOCK STRUCTURE
+        LVL_DF,                         % UPDATELEVELF
+        REO_REQ,                        % REORGREQ
+        STR_NUM,                        % STRUCTURE NUMBER
+        MAS_NUM;                        % STRUCTURE NUMBER (MASTER)
+
+REAL ARRAY
+    DIC_ARR[0:5999,0:13],
+    STR_ARR[0: 999,0: 2];
+
+ARRAY
+        BLS_ARR     [0: 0];             % BLOCK STRUCTURE
+
+ARRAY
+        STRAUX     [0: 3];             % BLOCK STRUCTURE
+
+TRUTHSET
+        LPRPST("()*");                  % DELIMITEURS USERCODE
+
+DEFINE
+        VALCHR  = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890/"#;
+
+
+EBCDIC ARRAY
+        WORKARRAY         ,             % ARRAY DE TRAVAIL
+        BAS_ACRNAME       ,             % NOM DES ACCESSROUTINES
+        DAT_DSNAME        ,             % NOM DU DATASET
+        BAS_COMMENT [0:59],             % COMMENTAIRE POUR LA BASE
+        BAS_LEVEL   [0: 5];             % NIVEAU DE SOFTWARE
+
+STRING
+        S,
+        SDFUSR,                         % USERCODE DE LA DF
+        SDFPK,                          % PACK DF
+        SBASE,                          % NOM DE LA BASE
+        SRELID,                         % RELEASEID INFO
+        SRLS,                           % RELEASE ID (APPLICATION)
+        SLEVL;                          % NIVEAU DE SOFTWARE
+
+BOOLEAN
+        DEF_DBNP,                       % DATABASE DEFAULT NEW PLATEAU
+        DEF_DSNP,                       % DATASET DEFAULT NEW PLATEAU
+        DEF_STNP,                       % SET DEFAULT NEW PLATEAU
+        DEF_DSST,                       % DATASET DEFAULT SECTIONED
+        DEF_STST;                       % SET DEFAULT SECTIONED
+
+REAL ARRAY
+    OUT_ARR[0: 21],             % LIGNE D'IMPRESSION
+    TAB_ARR[0: 21],             % LIGNE TABLE DES MATIERES
+    TT1_ARR[0: 21],             % LIGNE TITRE-1
+    TT2_ARR[0: 21],             % LIGNE TITRE-2
+    TT3_ARR[0: 21],             % LIGNE TITRE-3
+    MSG_ARR[0: 19],             % DISPLAY
+    ONE_ARR[0:  0],             % BLOCK FIRST WORD
+    DBA_TIT[0:  9],             % TITLE DESCRIPTION FILE
+    DBA_NAM[0:  2],             % DATABASE NAME
+    DBA_USR[0:  1],             % DATABASE USER
+    DBA_PCK[0:  2],             % DATABASE PACK
+    OUT_TIT[0:  9],             % TITLE IMAGE DASDL
+    DIC_TIT[0:  9],             % TITLE DICTIONNARY FILE
+    OFF_ARR[0: 99];             % OFFSET PAR LEVEL
+
+EBCDIC ARRAY
+    EUSER[0] = DBA_USR,         % DESCRIPTION FILE USER
+    EBASE[0] = DBA_NAM,         % BASE NAME
+    EPACK[0] = DBA_PCK;         % DESCRIPTION FILE PACK
+
+
+%--------------------------------------------
+
+   Array Inp[0:6]
+        ,Config_FileName
+        ,dmsup_name[0:29]
+        ,properties[0:0]
+        ;
+
+   Pointer p, Config_fileName_ptr, dmsup_namep;
+
+%--------------------------------------------
+
+LIBRARY auditlib (
+       TITLE="*SYSTEM/DMS591/DMAUDITLIB ON DISK."
+                 )
+       [ARRAY   AUDIT_INFO [0];
+        INTEGER ALF_LINKV,
+                ALB_LINKV,
+                ALB_SIZEV,
+                ALS_LINKV,
+                ALS_SIZEV,
+                ALK_LINKV,
+                ALK_SIZEV;
+        BOOLEAN LOCATEFAST_CAPABLE;
+        ARRAY   AUDIT_BUFFERS [0,0] (READWRITE);
+       ];
+
+
+define
+  cor (a,b)             = (if (a) then true else (b)) #,
+  cand (a,b)            = (if (a) then (b) else false) #,
+  donothing             =  #,
+  space                 = " " #,
+  comma                 = "," #,
+  aeok                  = 0  #,
+  aeendoffilev          = 17 #,
+  aeauditstopperv       = 36 #,
+
+  %  identifier / family / title limits
+  identifier_max_length = 17 #,
+  family_max_length     = 52 #, % disk = <pp> otherwise <sp> 17*2+18
+  filetitle_max_levels  = 14 #,
+  filetitle_max_length := (filetitle_max_levels *
+                          (identifier_max_length + 3) + 2) #,
+
+  au_len = 3000 #,  %max size of audit record (logical)
+  CrLf   = 48"0D25"#;
+
+array
+  rec[0:au_len-1],
+  msg[0:1000]
+  ;
+
+ebcdic array
+  intl_conv,
+  conv_ary ,
+  intl_lang[0:29],
+  struct_name[0:4095,0:17]
+  ;
+
+string db_name, us_name, aud_pck, db_pack;
+
+real
+  lb,
+  ub,
+  type,
+  audsnf,
+  audsze,
+  dbAuditno,
+  dbAuditbn,
+  curr_absn;
+
+boolean
+  isaborted;
+library dmsupport;
+
+%-------------------------------------------
+
+
+%-------------------------------------------
+
+  real procedure init_properties(str,properties);
+  %            ---------------
+    value str;
+    real str;
+    array properties[0];
+  library dmsupport;
+
+%library auditlib (libaccess= byfunction,
+%                  functionname = "DMSIIAUDITSUPPORT.")
+%       [array   audit_info [0];
+%        integer alf_linkv,
+%                alb_linkv,
+%                alb_sizev,
+%                als_linkv,
+%                als_sizev,
+%                alk_linkv,
+%                alk_sizev;
+%        boolean locatefast_capable;
+%        array   audit_buffers [0,0] (readwrite);
+%       ];
+%
+boolean procedure audit_open
+%                 ----------
+                  (dbname, dbpack, afn, aftyp, dontwait);
+      value dbname, dbpack, afn, aftyp, dontwait;
+      string dbname, dbpack;
+      integer afn, aftyp;
+      boolean dontwait;
+         library auditlib;
+
+boolean procedure audit_close;
+%                 -----------
+         library auditlib;
+boolean procedure audit_next_record
+%                -----------------
+                 (fswok, absn, rtyp, strno, rlen, bufinx, recoff);
+      value   fswok;
+      boolean fswok;
+      integer absn, rtyp, strno, rlen, bufinx, recoff;
+         library auditlib;
+
+  real
+   dm_absn,
+   dm_audit,
+   dm_absnflushed,
+   dm_users,
+   dm_sptabsn,
+   dm_spttimestamp,
+   dm_level,
+   dm_ctrlstate,
+   dm_absncheck,
+   de_sptabsn;
+
+  Integer Afn, param_length;
+
+
+% _____________________________________________________________________
+%
+%                                  Auditor
+% _____________________________________________________________________
+
+
+  Define
+  % Auditor file attributes
+    Auditor_buffer_size      = 60000 #   % in chars.
+   ,Auditor_write_max        = 1000000#% max # records per Auditor file
+   ,Auditor_fileName_prefix       = "DBA/" #
+   ,Auditor_fileName_prefix_share = "UNC/DEX/"""Auditing"""/" #
+   ,Auditor_max_data_size    = 540 #
+   ;
+
+  Integer
+    AuditorNo                 % denotes Auditor file name suffix #
+   ,Auditor_write_count       % # of records written
+   ;
+
+  Pointer
+     Auditor_fileName_ptr
+    ,pmsg
+    ;
+
+  Ebcdic Array
+    Auditor_FileName [0:filetitle_max_length-1]
+   ,Auditor_Buff [0:Auditor_buffer_size-1]
+   ;
+
+  File
+    Auditor_File;
+
+EBCDIC ARRAY
+    EPARM[0] = PAR_ARR;
+
+TRUTHSET
+    QUOPNT(48"7F4B"),
+    CHIFFRES("0123456789"),
+    WHERECHR(48"160B1521181E1F00"),
+    ALPDIG("ABCDEFGHIJKLMNOPQRSTUVWXYZ-/0123456789");
+
+TRANSLATETABLE
+    LOWUP(EBCDIC                       TO
+          EBCDIC,
+          "abcdefghijklmnopqrstuvwxyz" TO
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+
+POINTER
+    PA,
+    PB,
+    PC,
+    PW;
+
+LABEL
+    EXIT;
+
+INTEGER ISTRS, I;
+
+STRING SAUDITNO,
+       SAUDPACK;
+
+ARRAY STRS[0:20,0:2];  %LIST OF STRUCTURES
+
+
+%--------------------------------------
+
+
+
+%--------------------------------------
+
+PROCEDURE READ_BLOCK(GET_ARR,DEF_ADD);
+          VALUE         DEF_ADD;
+          INTEGER       DEF_ADD;
+          ARRAY         GET_ARR[0];
+BEGIN
+    READ(FDBA[DEF_ADD],1,ONE_ARR);
+
+    RED_REC:=ONE_ARR[DESCBLOCKRECS];
+    RED_LEN:=ONE_ARR[DESCBLOCKRECS] * 256 - 1;
+    RED_IDX:=0;
+
+    RESIZE(GET_ARR,RED_LEN,DISCARD);
+
+    FOR RED_KDX:=1 STEP 1 UNTIL RED_REC DO
+    BEGIN
+         READ(FDBA[DEF_ADD],256,GET_ARR[RED_IDX]);
+         RED_IDX:=* + 256;
+         DEF_ADD:=* + 1;
+    END;
+
+    TXT_BAS:=GET_ARR[TEXTBASELOC];
+END;
+
+
+PROCEDURE STRUCTURE_NX_IN_DESCRIPTION;
+
+BEGIN
+
+ LABEL
+       LOOP_STR,
+       END_LOOP;
+
+ LOOP_STR :
+
+  IF INXS := * + 1 > NOF_STR THEN GO END_LOOP;
+
+  STR_ADD := BEG_LST + INXS;
+  BLK_STR := BLB_ARR[STR_ADD].[NODEBLOCK];
+  BEG_STR := BLB_ARR[STR_ADD].[NODEPROLS];
+
+  IF BLK_STR NEQ OLD_BST THEN
+    BEGIN
+      OLD_BST := BLK_STR;
+      WRD_ADD := BEG_BLK + BLK_STR;
+      DAS_ADD := BL0_ARR[WRD_ADD];
+      READ_BLOCK(BLS_ARR,DAS_ADD);
+      BLS_TXT := BLS_ARR[TEXTBASELOC];
+    END;
+
+  IF BLS_ARR[BEG_STR + LEVELF ] EQL 0 THEN GO LOOP_STR;
+  IF BLS_ARR[BEG_STR + DELETED] EQL 1 THEN GO LOOP_STR;
+
+  IF BLS_ARR[BEG_STR + TYPEF  ] EQL 2 THEN
+    BEGIN
+      %FIND_DATASET_PROP;
+      GO LOOP_STR;
+    END;
+
+%  IF BLS_ARR[BEG_STR + TYPEF  ] EQL 5 THEN
+%    BEGIN
+%      FIND_SET_PROP;
+%      GO LOOP_STR;
+%    END;
+
+  GO LOOP_STR;
+
+ END_LOOP :
+
+END OF STRUCTURE_NX_IN_DESCRIPTION;
+
+
+% ---------------------------------------------------------------------
+
+  Procedure Initialise_Auditor_File;
+% -------------------------------
+  begin
+
+  ARRAY A[0:20];
+
+     If to_share then
+     Begin
+       %%%Auditor_File.Redirection        := True;
+       Auditor_File.kind               := Value(Disk);
+       Auditor_File.FRAMESIZE          := 8;
+       Auditor_File.MINRECSIZE         := 1;
+       Auditor_File.MAXRECSIZE         := 1;
+       Auditor_File.BLOCKSTRUCTURE     := Value(FIXED);
+       Auditor_File.FILESTRUCTURE      := Value(STREAM);
+       Auditor_File.FILEORGANIZATION   := Value(NOTRESTRICTED);
+       Auditor_File.ANYSIZEIO          := TRUE;
+       Auditor_File.DEPENDENTINTMODE   := TRUE;
+       Auditor_File.NEWFILE            := TRUE;
+       Auditor_File.SECURITYTYPE       := 1;
+
+       Auditor_fileName_ptr := Auditor_FileName;
+%       replace Auditor_fileName_ptr:Auditor_fileName_ptr by
+%                Auditor_fileName_prefix_share
+%                , db_name, "/AUDIT_"
+%               , auditno for * digits, "_";
+
+      replace Auditor_fileName_ptr:Auditor_fileName_ptr by
+             Auditor_fileName_prefix, EBASE  UNTIL = " ", "/AUDIT/"
+%            , auditno for * digits, "/";
+            , auditno for * digits, ".";
+
+      % replace Auditor_fileName_ptr by AuditorNo for * digits, ".";
+       replace Auditor_file.fileName by Auditor_FileName;
+       REPLACE POINTER(A) BY " " FOR 100;
+       REPLACE POINTER(A) BY "OUTPUT FILE=",AUDITOR_FILENAME
+               UNTIL EQL ".";
+       DISPLAY(POINTER(A));
+     End
+     Else
+     Begin
+      Auditor_File.kind        := Value(Disk);
+      Auditor_File.Framesize   := 8;
+      Auditor_File.MaxRecSize  := Auditor_buffer_size;
+      % max cande will handle
+      %Auditor_File.BlockSize   := (Auditor_buffer_size*34);
+      Auditor_File.Protection  := Value(save);
+
+      Auditor_fileName_ptr := Auditor_FileName;
+      replace Auditor_fileName_ptr:Auditor_fileName_ptr by
+             Auditor_fileName_prefix, EBASE  UNTIL = " ", "/AUDIT/"
+%            , auditno for * digits, "/";
+            , auditno for * digits, ".";
+
+%      replace Auditor_fileName_ptr by AuditorNo for * digits, ".";
+      replace Auditor_file.fileName by Auditor_FileName;
+       REPLACE POINTER(A) BY " " FOR 100;
+       REPLACE POINTER(A) BY "OUTPUT FILE=",AUDITOR_FILENAME
+               UNTIL EQL ".";
+       DISPLAY(POINTER(A));
+
+     end;
+ End;
+% ---------------------------------------------------------------------
+
+  Procedure New_Auditor_File;
+% ------------------------
+
+  %--------------------------------------------------------------------%
+  %                                                                    %
+  %  Releases the current Auditor file, alters the Auditor title suffix%
+  %  and continues with a new Auditor file.                            %
+  %                                                                    %
+  %--------------------------------------------------------------------%
+
+  Begin
+    AuditorNo := * + 1;
+    Auditor_write_count := 0;
+    If to_share Then
+    Begin
+     replace Auditor_fileName_ptr by AuditorNo for * digits, ".";
+     replace Auditor_file.fileName by Auditor_FileName;
+    End
+    Else
+    Begin
+     replace Auditor_FileName_ptr by AuditorNo for * digits, ".";
+     replace Auditor_File.FileName by Auditor_FileName;
+    End;
+  End;
+
+% ---------------------------------------------------------------------
+
+  Procedure End_Auditor_File;
+% ------------------------
+
+  %--------------------------------------------------------------------%
+  %                                                                    %
+  %  Releases the current Auditor file.                                %
+  %                                                                    %
+  %--------------------------------------------------------------------%
+
+  Begin
+    Lock (Auditor_file, crunch);
+  End;
+
+% ---------------------------------------------------------------------
+
+  procedure Auditor ;%(msg);
+% ---------------
+%    array msg[0];
+  begin
+    pointer p;
+    p := pointer(msg[0]);
+
+    if Auditor_write_count eql 0 then
+     If to_share Then
+      begin
+        replace Auditor_buff[0] by
+          "Date,Time,DataBase,Structure,Operation,AuditNo,AuditBn,",
+          "RecordSerialNumber,Stack,Aborted", CrLf;
+        write(Auditor_File, 89, Auditor_buff[0]);
+      end
+      else
+      begin
+        AUDITOR_FILE.MAXRECSIZE:=MAXRECSIZEF;
+        Auditor_File.BlockSize   := (MAXRECSIZEF*10);
+        replace Auditor_buff[0] by
+          "Date,Time,DataBase,Structure,Operation,AuditNo,AuditBn,",
+          "RecordSerialNumber,Stack,Aborted,Record",
+%          " " for Auditor_buffer_size-87;
+          " " for MAXRECSIZEF-87;
+%%   NO HEADER
+%%        write(Auditor_File, Auditor_buffer_size, Auditor_buff[0]);
+      end;
+
+    If to_share
+    Then
+    Begin
+       replace Auditor_buff[0] by p:p for offset(pmsg);
+       write(Auditor_File, offset(pmsg), Auditor_buff[0]);
+       RECORDCNT:=RECORDCNT+1;
+    End
+    Else
+    Begin
+    %replace Auditor_buff[0] by p:p for Auditor_buffer_size;
+       replace Auditor_buff[0] by p:p for MAXRECSIZEF;
+       write(Auditor_File, Auditor_buffer_size, Auditor_buff[0]);
+       RECORDCNT:=RECORDCNT+1;
+    End;
+    Auditor_write_count := * + 1;
+
+%    if Auditor_write_count >= Auditor_write_max then
+%    Begin
+%      DISPLAY("MAXIMUM NUMBER OF RECORDS REACHED: " CAT
+%                STRING(Auditor_write_max,*));
+%      End_Auditor_File;
+%      new_Auditor_file;
+%    End;
+
+   End Auditor;
+%
+procedure Open_Audit;
+  begin
+
+  AUDIT_OPEN ("(" CAT us_name CAT ")" cat db_name,
+              aud_pck,
+              auditno,
+              1,
+              false);
+%%   AUDIT_OPEN ("BCOM26","BBLTS1", auditno, 1, false);
+  end;
+%
+boolean procedure HandleAuditReads ;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+begin
+ define
+   MaxAbsn            = 4294962926 #;
+ real
+   struc,
+   recordsn,
+   auddate,
+   audsnr;
+ integer
+   rem,
+   dtlen,
+   I,
+   DESLOC;
+ boolean
+   cnv_usstd,
+   display_juldate,
+   intl_typ;
+%    pointer
+%      pmsg;
+ label
+   xit;
+
+ HandleAuditReads:= true;
+ struc:= 0 & audsnf[23:24];
+ if struc neq 2 then %% it's not auditarea
+   begin
+      If cand(type eql dsm,
+              not(boolean(AUDIT_BUFFERS[lb,ub+1].AUDMODIFYF))) then
+              type :=  999; %skip this dsm record
+      case type of
+       begin
+         sac:sad:sam:
+           isaborted:= boolean(AUDIT_BUFFERS[lb,ub].audsaflagf);
+
+         dsc:dsd:dsm:
+           % don't have to look at data yet just the Audit attributes
+           % and RSN
+
+              IF TYPE EQL DSC THEN
+              BEGIN
+                 DSCCNT:=DSCCNT+1;
+                 IF isaborted THEN
+                    DSCRBCNT:=DSCRBCNT+1;
+              END
+              ELSE
+                 IF TYPE EQL DSM THEN
+                 BEGIN
+                    DSMCNT:=DSMCNT+1;
+                    IF isaborted THEN
+                       DSMRBCNT:=DSMRBCNT+1;
+                 END
+              ELSE
+                 IF TYPE EQL DSD THEN
+                 BEGIN
+                    DSDCNT:=DSDCNT+1;
+                    IF isaborted THEN
+                       DSDRBCNT:=DSDRBCNT+1;
+                 END;
+
+              pmsg:= pointer(msg);
+              replace pmsg by " " for size(msg)*6;
+
+              auddate:=ali_info[ali_blk_datestamp];
+              dmformattime6(cnv_usstd,auddate
+                           ,display_juldate,intl_typ
+                           ,intl_conv,intl_lang,dtlen
+                           ,conv_ary);
+
+              recordsn:= AUDIT_BUFFERS[lb,ub+3];% not sectioned
+              audsnr:=ali_info[ali_rec_processid];
+
+              replace pmsg:pmsg by conv_ary[0] for rem:dtlen
+                                               until eql space,comma;
+           %   leave time out for the moment - it's in 5.0
+              rem:=*-1; % step over space
+              replace pmsg:pmsg by conv_ary[dtlen-rem] for rem
+                                  ,comma
+                                  ,db_name
+                                  %%," " FOR 17-LENGTH(db_name)
+                                  ,comma;
+              If struct_name[struc,0] neq 48"00" then
+              Begin
+                 I:=0;
+                 replace pmsg:pmsg by
+                         struct_name[struc,1]
+                            %%%FOR I:17
+                            until = " ";
+                 replace pmsg:pmsg by
+                         " " FOR I,
+                         ",";
+%              if type eql dsc then
+%                replace pmsg:pmsg by "Insert,"
+%              else if type eql dsd then
+%                replace pmsg:pmsg by "Delete,"
+%              else if type eql dsm then
+%                replace pmsg:pmsg by "Update,";
+
+              if type eql dsc then
+                replace pmsg:pmsg by "I,"
+              else if type eql dsd then
+                replace pmsg:pmsg by "D,"
+              else if type eql dsm then
+                replace pmsg:pmsg by "U,";
+
+              If struct_name[struc,0] eql "1" then
+                 replace pmsg:pmsg by
+                    dbAuditno for 4 digits,comma,
+                    curr_absn for * digits,comma,
+                    recordsn for * digits,comma,
+                    audsnr for * digits,comma
+              else
+                 replace pmsg:pmsg by
+                    dbAuditno for 4 digits,comma,
+                    curr_absn for * digits,comma,
+                    "0",comma,
+                    audsnr for * digits,comma;
+
+              if isaborted then
+                replace pmsg:pmsg by "Y,"
+              else
+                replace pmsg:pmsg by " ,";
+
+              If struct_name[struc,0] eql "1" then
+              BEGIN
+                  DESLOC:=4;
+                     MAXRECSIZEF:= 102 + (audsze/2 * 6) - 24;
+                  IF TYPE EQL DSM THEN
+                  BEGIN
+                     DESLOC:=(AUDSZE/2)+2;
+                  END;
+              END
+              ELSE
+              BEGIN
+                  DESLOC:=3;
+                  MAXRECSIZEF:= 102 + (audsze/2 * 6) - 18;
+                  IF TYPE EQL DSM THEN
+                  BEGIN
+                     DESLOC:=(AUDSZE/2)+1;
+                  END;
+
+              END;
+
+              replace pmsg:pmsg by pointer(AUDIT_BUFFERS[lb,ub+DESLOC])
+                    for (audsze * 6) - (DESLOC*6) ;
+
+              isaborted:= false;
+              if to_share then replace pmsg:pmsg by CrLf;
+              Auditor;%(msg);
+              End;
+         else: donothing;%replace pmsg:pmsg by type for * digits,",";
+       end;
+   end;
+end;
+%
+boolean procedure HandleAuditEOF ;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+begin
+ label xit;
+ define MaxAudit = 9999 #;
+ HandleAuditEOF:= true;
+
+ xit:
+end;
+%
+boolean procedure HandleAuditStopper;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+begin
+ HandleAuditStopper:= true;
+
+end;
+%
+procedure Process_Audit;
+begin
+ boolean brslt,
+         fswitch;
+ real rslt = brslt,
+      str;
+
+ label xit;
+
+ while true do
+    begin
+      %% and away we go
+      dbAuditno:= alf_info[alf_filenumber];
+%         fswitch:= dm_audit gtr dbAuditno;
+      fswitch := false; %No next audit
+      brslt := audit_next_record(fswitch,curr_absn,type,
+                                 audsnf,audsze,lb,ub);
+
+      case (rslt.[19:16]) of
+        begin
+          aeok:
+            if not HandleAuditReads then
+              begin
+                display("HandleAuditReads");
+                go xit;
+              end;
+
+          aeendoffilev:
+            if not HandleAuditEOF then
+              begin
+                display("HandleAuditEOF");
+                go xit;
+              end;
+            go xit;
+          aeauditstopperv: % stopper pattern
+            if not HandleAuditStopper then
+              begin
+                display("HandleAuditStopper");
+                go xit;
+              end;
+            go xit;
+          else:
+            display(string(rslt,*));
+            go xit ;
+        end;
+
+    end;
+
+ xit:
+end of processaudit;
+
+
+
+PROCEDURE GET_NAMES;
+BEGIN
+LONG ARRAY
+    BLS_ARR[0:0];
+
+INTEGER
+    STR_ADD,
+    STR_NUM,
+    BLK_STR,
+    LST_STR,
+    PRP_STR;
+
+POINTER
+    PA,
+    PB;
+
+LABEL
+    LOOP_STR,
+    EXIT;
+
+    INT1:=0;
+
+LOOP_STR:
+    IF INT1:=* + 1 GTR NOF_STR THEN GO EXIT;
+
+    STR_ADD:=LST_DBA + INT1;
+    BLK_STR:=BLB_ARR[STR_ADD].[NODEBLOCK];
+    LST_STR:=BLB_ARR[STR_ADD].[NODESTRLS];
+    PRP_STR:=BLB_ARR[STR_ADD].[NODEPROLS];
+
+    WRD_ADD:=BEG_BLK + BLK_STR;
+    RED_ADD:=BL0_ARR[WRD_ADD];
+    READ_BLOCK(BLS_ARR,RED_ADD);
+
+    IF BLS_ARR[PRP_STR + LEVELF ] EQL 0 THEN GO LOOP_STR;
+    IF BLS_ARR[PRP_STR + DELETED] EQL 1 THEN GO LOOP_STR;
+
+    STR_NUM:=BLS_ARR[PRP_STR + STRUCTURENUM];
+    NOF_CHR:=BLS_ARR[PRP_STR + IDENTIFIERSZ];
+    PA     :=PT(BLS_ARR[PRP_STR + WORDONE]) + 1;
+    PB     :=PT(STR_ARR[STR_NUM,*]);
+
+    RP PB BY PA FOR NOF_CHR," " FOR 18-NOF_CHR;
+
+    GO LOOP_STR;
+
+EXIT:
+END;
+
+
+INTEGER PROCEDURE GET_STR_NUM(STRNAME);
+  ARRAY STRNAME[*];
+BEGIN
+    LABEL EXIT;
+    BOOLEAN EXTENDED;
+    Array
+        properties[0:0]
+        ;
+
+    FOR INT1:=1 STEP 1 UNTIL NOF_STR DO
+    BEGIN
+       IF POINTER(STR_ARR[INT1,0]) EQL POINTER(STRNAME) FOR 17 THEN
+       BEGIN
+           GET_STR_NUM:=INT1;
+           init_properties(INT1, properties);
+           extended:= boolean(properties[newplateau]);
+           if extended then replace struct_name[INT1,0]
+                                   by "1",POINTER(STRNAME) FOR 17
+                      else replace struct_name[INT1,0]
+                                   by "0",POINTER(STRNAME) FOR 17;
+           GO TO EXIT;
+       END;
+    END;
+    GET_STR_NUM:=0;
+
+EXIT:
+
+END;
+
+
+BOOLEAN PROCEDURE GOOD_PARAMETER(EPARM,EUSER,EBASE,EPACK);
+        EBCDIC ARRAY  EPARM[0], %-----> PARAMETRE D'ENTREE
+                      EUSER[0], %-----> USER [0:11]
+                      EBASE[0], %-----> BASE [0:17]
+                      EPACK[0]; %-----> PACK [0:17]
+BEGIN
+INTEGER
+    NA;
+
+POINTER
+    PA;
+
+ARRAY A[0:3];
+
+STRING
+    SWORK,
+    SUSER,
+    SBASE,
+    SPACK,
+ %%   SAUDITNO,
+    STRNAME,
+    STRUCTURES;
+
+
+LABEL
+    EXIT;
+
+TRUTHSET
+    CHAR("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/"),
+    NUMBERS("0123456789");
+
+
+    SUSER:=EMPTY;
+    SBASE:=EMPTY;
+    SPACK:=EMPTY;
+
+    REPLACE EUSER BY " " FOR 12;
+    REPLACE EBASE BY " " FOR 18;
+    REPLACE EPACK BY " " FOR 18;
+
+    SCAN PA:EPARM UNTIL = 48"00";
+    IF NA:=OFFSET(PA) EQL 0 THEN GO EXIT;
+
+    SWORK:=TAIL(STRING(EPARM,NA)," ");
+    IF LENGTH(SWORK) LSS 2 THEN GO EXIT;
+
+    IF TAKE(SWORK,2) NEQ "DB" THEN
+         BEGIN
+            DISPLAY("<<DB>> MISSING");
+            GO EXIT;
+         END;
+
+    SWORK:=TAIL(DROP(SWORK,2)," ");
+    IF LENGTH(SWORK) LSS 1 THEN GO EXIT;
+
+    IF TAKE(SWORK,1) EQL "=" THEN
+    BEGIN
+         SWORK:=TAIL(SWORK,"= ");
+         IF LENGTH(SWORK) LSS 1 THEN GO EXIT;
+    END;
+
+    IF TAKE(SWORK,1) EQL "*" THEN
+    BEGIN
+         SUSER:="*";
+         SWORK:=TAIL(DROP(SWORK,1)," ");
+         IF LENGTH(SWORK) LSS 1 THEN GO EXIT;
+    END ELSE
+    IF TAKE(SWORK,1) EQL "(" THEN
+    BEGIN
+         SWORK:=TAIL(DROP(SWORK,1)," ");
+         IF LENGTH(SWORK) LSS  1  THEN
+         BEGIN
+            DISPLAY("INVALID USERCODE");
+            GO EXIT;
+         END;
+
+         SUSER:=HEAD(SWORK,CHAR);
+         IF LENGTH(SUSER) GTR  12 THEN
+         BEGIN
+            DISPLAY("INVALID USERCODE");
+            GO EXIT;
+         END;
+
+         SWORK:=TAIL(DROP(SWORK,LENGTH(SUSER))," ");
+         IF LENGTH(SWORK) LSS  1  THEN GO EXIT;
+         IF TAKE(SWORK,1) NEQ ")" THEN
+         BEGIN
+            DISPLAY("INVALID USERCODE");
+            GO EXIT;
+         END;
+
+         SWORK:=TAIL(DROP(SWORK,1)," ");
+         IF LENGTH(SWORK) LSS  1  THEN GO EXIT;
+    END;
+
+    SBASE:=HEAD(SWORK,CHAR);
+    IF LENGTH(SBASE) GTR 18 THEN
+         BEGIN
+            DISPLAY("INVALID DATABASE NAME");
+            GO EXIT;
+         END;
+
+    SWORK:=TAIL(DROP(SWORK,LENGTH(SBASE))," ");
+
+    IF LENGTH(SWORK) GTR 0 THEN
+    BEGIN
+         IF LENGTH(SWORK) LSS   4  THEN GO EXIT;
+         IF TAKE(SWORK,2) NEQ "ON" THEN
+         BEGIN
+            DISPLAY("<<ON>> MISSING  ");
+            GO EXIT;
+         END;
+
+         SWORK:=TAIL(DROP(SWORK,2)," ");
+         IF LENGTH(SWORK) LSS   1  THEN GO EXIT;
+
+         SPACK:=HEAD(SWORK,CHAR);
+         IF LENGTH(SPACK) GTR  18  THEN
+         BEGIN
+            DISPLAY("INVALID FAMILY NAME");
+            GO EXIT;
+         END;
+
+         SWORK:=TAIL(DROP(SWORK,LENGTH(SPACK))," ");
+         IF LENGTH(SWORK) EQL   0  THEN GO EXIT;
+    END;
+
+    REPLACE EUSER BY SUSER;
+    REPLACE EBASE BY SBASE;
+    REPLACE EPACK BY SPACK;
+
+%  AUDIT NUMBER
+    SWORK:=TAIL(SWORK," ");
+
+    IF TAKE(SWORK,5) NEQ "AUDIT" THEN
+         BEGIN
+            DISPLAY("<<AUDIT>> MISSING");
+            GO EXIT;
+         END;
+
+    SWORK:=TAIL(DROP(SWORK,5)," ");
+    IF LENGTH(SWORK) LSS 1 THEN GO EXIT;
+
+    IF TAKE(SWORK,1) EQL "=" THEN
+    BEGIN
+         SWORK:=TAIL(SWORK,"= ");
+         IF LENGTH(SWORK) LSS 1 THEN GO EXIT;
+    END;
+    SAUDITNO:=HEAD(SWORK,NUMBERS);
+    REPLACE POINTER(A) BY SAUDITNO;
+
+    auditno:=INTEGER(POINTER(A),LENGTH(SAUDITNO));
+
+    SWORK:=TAIL(DROP(SWORK,LENGTH(SAUDITNO))," ");
+
+%  AUDIT FAMILY
+
+    SWORK:=TAIL(SWORK," ");
+
+    IF TAKE(SWORK,7) NEQ "AUDPACK" THEN
+         BEGIN
+            DISPLAY("<<AUDPACK>> MISSING");
+            GO EXIT;
+         END;
+
+    SWORK:=TAIL(DROP(SWORK,7)," ");
+    IF LENGTH(SWORK) LSS 1 THEN GO EXIT;
+
+    IF TAKE(SWORK,1) EQL "=" THEN
+    BEGIN
+         SWORK:=TAIL(SWORK,"= ");
+         IF LENGTH(SWORK) LSS 1 THEN GO EXIT;
+    END;
+    aud_pck:=HEAD(SWORK,CHAR);
+
+%    DISPLAY ("AUDIT FAMILY " CAT SAUDPACK);
+
+    SWORK:=TAIL(DROP(SWORK,LENGTH(aud_pck))," ");
+
+
+%  STR LIST
+
+    IF TAKE(SWORK,3) NEQ "STR" THEN
+         BEGIN
+            DISPLAY("<<STR>> MISSING");
+            GO EXIT;
+         END;
+
+    SWORK:=TAIL(DROP(SWORK,3)," ");
+    IF LENGTH(SWORK) LSS 1 THEN GO EXIT;
+
+    IF TAKE(SWORK,1) EQL "=" THEN
+    BEGIN
+         SWORK:=TAIL(SWORK,"= ");
+         IF LENGTH(SWORK) LSS 1 THEN GO EXIT;
+    END;
+    STRUCTURES:=SWORK;
+%    DISPLAY ("STRUCTURES=" CAT STRUCTURES);
+    ISTRS:=0;
+    WHILE LENGTH(SWORK) > 0 AND ISTRS=0 DO
+    BEGIN
+      STRNAME:=HEAD(SWORK, NOT ", ");
+      REPLACE STRS[ISTRS,0] BY STRNAME               ;
+%      DISPLAY(POINTER(STRS[ISTRS,0]));
+      ISTRS:=ISTRS+1;
+      SWORK:=TAIL(DROP(SWORK,LENGTH(STRNAME)) ,  ", ");
+    END;
+    ISTRS:=ISTRS-1;
+%    DISPLAY("NBR STRS=" CAT  STRING(ISTRS+1 ,*));
+    GOOD_PARAMETER:=TRUE;
+EXIT:
+END;
+
+
+%
+Procedure Read_param;
+Begin
+  scan pointer(usr[0]) for param_length:100 until = 48"00";
+  param_length := 100-param_length;
+  us_name := string(usr,param_length);
+  scan pointer(datadb[0]) for param_length:100 until = 48"00";
+  param_length := 100-param_length;
+  db_name := string(datadb,param_length);
+  scan pointer(apck[0]) for param_length:100 until = 48"00";
+  param_length := 100-param_length;
+  aud_pck := string(apck,param_length);
+
+
+    PB:=PT(DBA_TIT);
+
+    IF EUSER EQL "*" THEN RP PB:PB BY "*" ELSE
+    IF EUSER NEQ " " THEN RP PB:PB BY "(",EUSER UNTIL = " ",")";
+
+    RP PB:PB BY "DESCRIPTION/",EBASE UNTIL = " ";
+
+    IF EPACK NEQ " " THEN RP PB:PB BY " ON ",EPACK UNTIL = " ";
+
+    RP PB:PB BY ".";
+
+    RP FDBA.TITLE BY PT(DBA_TIT);
+
+    IF NOT FDBA.RESIDENT THEN
+    BEGIN
+         RP PT(MSG_ARR) BY PT(DBA_TIT) UNTIL =".",48"00";
+         DISPLAY(PT(MSG_ARR));
+         DISPLAY("NO DESCRIPTION FILE");
+         MYSELF.STATUS:=-1;
+    END;
+
+End of Read_param;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% From the config we build a two dimensional array the structure number
+% is the index, the first pos of the row indicates extended, next is
+% the name of the structure.
+% The extended option in queried via the dmsupport
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Procedure Read_Config;
+Begin
+
+   Array Inp[0:6]
+        ,Config_FileName
+        ,dmsup_name[0:29]
+        ,properties[0:0]
+        ;
+   String str_name;
+   Boolean extended, dbpckb;
+   Integer n, str_num;
+   Pointer p, Config_fileName_ptr, dmsup_namep;
+   Truthset Numbers ("0123456789");
+   File config_file  ( kind = disk
+                     , dependentspecs = true
+                     , myuse  = in
+                     );
+   Config_fileName_ptr := Config_FileName;
+       replace Config_fileName_ptr:Config_fileName_ptr by
+                "CONFIG/", db_name,".";
+       replace Config_file.fileName by Config_FileName;
+
+   While not read(config_file,40,Inp) do
+   Begin
+     If pointer(Inp[0]) neq "%" then
+     Begin
+      p := pointer(Inp[0]);
+      If not dbpckb then
+      Begin
+       scan p for param_length:100 until = " ";
+       param_length := 100-param_length;
+       db_pack := string(p,param_length);
+       Replace dmsup_namep:= pointer(dmsup_name) by
+       us_name, "DMSUPPORT/", db_name, " ON ", db_pack, ".";
+       replace Dmsupport.title by dmsup_namep;
+       dbpckb := true;
+      End
+      Else
+      Begin
+         str_name := Head (string(p,40), NOT " ");
+         scan p:p For n:40 until = " ";
+         If n neq 0 then
+         Begin
+          scan p:p For n:n until in Numbers;
+          scan p   For n:n until = " ";
+          str_num := integer(p,40-n-offset(p));
+          init_properties(str_num, properties);
+          extended:= boolean(properties[newplateau]);
+          if extended then replace struct_name[str_num,0]
+                                   by "1",str_name
+                      else replace struct_name[str_num,0]
+                                   by "0",str_name;
+         End
+         Else
+         Begin
+          Display(" no strcuture nr");
+          Myself.Status := value(Terminated);
+         End
+      End;
+     End;
+   End;
+End of Read_Config;
+
+
+PROCEDURE WRITE_DATASET(S,F);
+          VALUE         S,F;
+          INTEGER       S,F;
+BEGIN
+LONG ARRAY
+    BLS_ARR[0: 0];            % BLOCK STRUCTURE
+
+REAL ARRAY
+    SAV_ARR[0: 19,0 :9,0:21],
+    SAV_FLG[0: 19],
+    STR_NAM[0:  2],           % STRUCTURE NAME
+    STR_DSC[0:  5],           % STRUCTURE DESCRIPTION
+    ITM_NAM[0:  3],
+    IDX_NAM[0:  3];           % STRUCTURE NAME
+
+REAL ARRAY
+    WWHR[0:2];
+
+EBCDIC ARRAY
+    EWHR[0] = WWHR;
+
+POINTER
+    PA,
+    PB,
+    PC,
+    PW;
+
+LABEL
+    EXIT;
+
+REAL
+    LD;
+
+INTEGER
+    I,
+    L,
+    X,
+    K,
+    N,
+    M,
+    D,
+    Q,
+    LV;
+
+INTEGER
+    OLD_LEV,
+    OLD_TYP,
+    NOF_CDS,                  % NOMBRE BLOCKS COMPACT
+    IDX_CDS,                  % INDICE LECTURE COMPACT
+    MAX_BLK,                  % MAXIMUM NOF BLOCKS
+    MAX_LEV,                  % LEVEL MAXIMUM INDEX
+    TOT_SEC,                  % TOTAL SEGMENTS
+
+    NOF_VAR,                  % NOMBRE TYPES VARIABLES
+
+    STR_ADD,                  % DEBUT STRUCTURE DANS BLOCK 0
+    BLK_STR,                  % NUMERO BLOCK STRUCTURE
+    LST_STR,                  % DEBUT LISTE STRUCTURE
+    PRP_STR,                  % DEBUT PROPERTIES STRUCTURE
+    LST_ITM,
+    PRP_ITM,
+ $ PAGE
+    STR_NUM,                  % STRUCTURE NUMBER
+    STR_TYP,                  % STRUCTURE TYPE
+    STR_SBT,                  % STRUCTURE SUBTYPE
+    STR_LEV,                  % VARIALBLE STRUCTURE
+    STR_VAR,                  % VARIALBLE STRUCTURE
+    STR_RST,                  % RESTART DATASET
+    STR_RSZ,                  % STRUCTURE RECORD SIZE
+    STR_AVR,                  % STRUCTURE AVR RECSIZE
+    STR_BSZ,                  % STRUCTURE BLOCK SIZE
+    STR_POP,                  % STRUCTURE POPULATION
+    STR_TVA,                  % REC TYPE SIZE IN BITS
+    STR_ASG,                  % STRUCTURE AREASIZE SEG
+    STR_LFC,                  % LOADFACTOR
+    STR_RWA,                  % DECLARED NOF ROWS
+    STR_RWE,                  % NOF EXTRA ROWS
+    STR_TSZ,                  % TABLE SIZE
+    STR_TSG,                  % TABLE SIZE IN SEG
+    STR_ESZ,                  % KEY ENTRY SIZE
+    STR_ASZ,                  % AREASIZE SEG
+    STR_BSG,                  % BLOCKSIZE SEG
+
+    NUL_ADD,
+    NUL_SIZ,
+    INT_ADD,
+    INT_SIZ,
+
+    ITM_NOD,                  % INDICE ADD TETE LISTE ITEMS
+    ITM_ADD,                  % INDICE ADD TETE POPPS ITEMS
+    ITM_PTR,                  % INDICE ADD DANS LISTE ITEMS
+    ITM_TYP,                  % TYPE ITEM
+    ITM_CHR,                  % NBR CARACTERES ITEM
+    ITM_OFF,                  % LONGUEUR ITEM
+    ITM_LNG,                  % LONGUEUR ITEM
+    ITM_SIZ,                  % LONGUEUR ITEM
+    ITM_OCC,                  % OCCURS ITEM
+    ITM_SIG,                  % ITEM SIGNE
+    ITM_DEC,                  % NOMBRE DE DECIMALES ITEM
+    ITM_LEV,                  % NIVEAU ITEM
+    ITM_VTP,
+    ITM_NUL,
+    ITM_INT,
+    ITM_VAR,
+    OLD_VAR,
+    NOF_ITM,                  % NOMBRE D'ITEMS
+    DMS_OFF,
+
+    DEP_ADD,
+    DEP_CHR,
+
+    LST_IDX,
+    NOF_IDX,
+    BLK_IDX,
+    PRP_IDX,
+    IDX_ADD,
+    IDX_NUM,
+    IDX_TYP,
+    IDX_SBT,
+ $ PAGE
+    LST_KEY,
+    NOF_KEY,
+    KEY_NOD,
+    LST_DAT,
+    NOF_DAT,
+    DAT_NOD,
+
+    WHR_ADD,
+    WHR_LEN,
+    WHR_LEV,
+
+    VRC_WRD,                  % VALID RECORD WORDS
+    VRC_TYP,                  % VALID RECORD TYPE
+    VRC_OFF,                  % VALID RECORD OFFSET
+    VRC_LEN,                  % VALID RECORD LENGHT
+
+    VAR_NOD,                  % VARIABLE NODE
+    VAR_PTR,                  %
+    VAR_ADD,                  %
+    VAR_NUM,                  %
+    VAR_LEN,                  %
+
+    VAL_MOD;                  %
+
+BOOLEAN
+    BEXT;
+ $ PAGE
+%----------------------------------------------------------------------%
+%                        MAIN OF WRITE_DATASET                         %
+%----------------------------------------------------------------------%
+    BOOLEAN GOINDEX;
+
+    GOINDEX:=TRUE;
+
+    STR_ADD:=LST_DBA + S;
+    BLK_STR:=BLB_ARR[STR_ADD].[NODEBLOCK];
+    LST_STR:=BLB_ARR[STR_ADD].[NODESTRLS];
+    PRP_STR:=BLB_ARR[STR_ADD].[NODEPROLS];
+
+    WRD_ADD:=BEG_BLK + BLK_STR;
+    RED_ADD:=BL0_ARR[WRD_ADD];
+    READ_BLOCK(BLS_ARR,RED_ADD);
+
+    IF F EQL 1 THEN
+       IF BLS_ARR[PRP_STR + LEVELF ] GTR 1 THEN GO EXIT;
+
+    IF BLS_ARR[PRP_STR + LEVELF ] EQL 0 THEN GO EXIT;
+    IF BLS_ARR[PRP_STR + DELETED] EQL 1 THEN GO EXIT;
+    IF BLS_ARR[PRP_STR + TYPEF  ] NEQ 2 THEN GO EXIT;
+
+    RP PT(STR_NAM) BY " " FOR 18;
+    RP PT(STR_DSC) BY " " FOR 36;
+
+    NOF_CHR:=BLS_ARR[PRP_STR + IDENTIFIERSZ];
+    PA     :=PT(BLS_ARR[PRP_STR + WORDONE]) + 1;
+    PB     :=PT(STR_NAM);
+
+    RP PB BY PA FOR NOF_CHR;
+
+    IF BLS_ARR[PRP_STR + DESCTEXT]     GTR 0 AND
+       BLS_ARR[PRP_STR + STRUCTURENUM] GTR 1 THEN
+    BEGIN
+         WRD_ADD:=TXT_BAS + BLS_ARR[PRP_STR + DESCTEXT];
+         NOF_CHR:=MIN(BLS_ARR[WRD_ADD].[47:8],36);
+         PA     :=PT(BLS_ARR[WRD_ADD]) + 1;
+         PB     :=PT(STR_DSC);
+         RP PB BY PA FOR NOF_CHR;
+    END ELSE
+         RP PT(STR_DSC) BY PT(STR_NAM) FOR 18;
+
+    FOR D:=0 STEP 1 UNTIL NOF_DIC DO
+        IF PT(STR_NAM) EQL PT(DIC_ARR[D,*]) FOR 17 THEN
+        BEGIN
+             PA:=PT(STR_DSC);
+             NA:=28;
+             RP PA BY PT(DIC_ARR[D,*])+42 FOR 28;
+             WHILE NA GTR 0 DO
+             BEGIN
+                  SCAN PA:PA FOR NA:NA UNTIL = " ";
+                  NOF_CHR:=28 - NA;
+                  IF NA GTR 0 THEN
+                     SCAN PA:PA FOR NA:NA WHILE = " ";
+             END;
+             D:=NOF_DIC;
+        END;
+ $ PAGE
+    STR_LEV:=BLS_ARR[PRP_STR + LEVELF      ];
+    STR_NUM:=BLS_ARR[PRP_STR + STRUCTURENUM];
+    STR_TYP:=BLS_ARR[PRP_STR + TYPEF       ];
+    STR_SBT:=BLS_ARR[PRP_STR + SUBTYPEF    ];
+
+    STR_VAR:=BLS_ARR[PRP_STR + RTYPESZ        ];
+    STR_RST:=BLS_ARR[PRP_STR + RESTARTDATASETF];
+
+    I:=((80 - NOF_CHR) DIV 2) + 8;
+
+    IF BLS_ARR[PRP_STR + NEWPLATEAU] EQL 1
+       THEN BEXT:=TRUE
+       ELSE BEXT:=FALSE;
+
+
+%    RP POUT:POUT BY "DS",SEP,
+%                 PT(STR_NAM) UNTIL EQL " ",
+%                 SEP,
+%                 STR_NUM FOR 3 DIGITS,
+%                 SEP,
+%                 PT(STR_DSC) FOR 28,
+%                 SEP;
+
+
+EXIT:
+END;
+
+
+BOOLEAN PROCEDURE READ_STRUCTURES;
+BEGIN
+
+LABEL EXIT;
+
+%    RP FDIC.TITLE BY PT(DIC_TIT);
+%
+%    IF FDIC.RESIDENT THEN
+%    BEGIN
+%         DISPLAY(PT(DIC_TIT));
+%         WHILE NOT READ(FDIC,14,DIC_ARR[NOF_DIC,*])
+%               DO NOF_DIC:=* + 1;
+%         NOF_DIC:=* - 1;
+%    END ELSE
+%         NOF_DIC:=-1;
+
+    READ_BLOCK(BL0_ARR,0);
+
+    BEG_BLK:=BL0_ARR[BLOCKDIRADDR];
+    NOF_BLK:=BL0_ARR[BLOCKDIRSZ] - 2;
+
+    BLK_DBA:=BL0_ARR[DBNODELOC].[NODEBLOCK];
+    LST_DBA:=BL0_ARR[DBNODELOC].[NODESTRLS];
+    PRP_DBA:=BL0_ARR[DBNODELOC].[NODEPROLS];
+
+    WRD_ADD:=BEG_BLK + 1;
+    RED_ADD:=BL0_ARR[WRD_ADD].[NODEPROLS];
+    READ_BLOCK(BLB_ARR,RED_ADD);
+
+    BLB_TXT:=BLB_ARR[TEXTBASELOC];
+
+    NOF_STR:=BLB_ARR[LST_DBA];
+
+    %FIND_DATABASE_PROP;
+    GET_NAMES;
+
+    RP OUT_ARR BY " " FOR 132;
+
+    FOR INT1:=1 STEP 1 UNTIL NOF_STR DO WRITE_DATASET(INT1,1);
+
+     READ_STRUCTURES:=TRUE;
+EXIT:
+END;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ MYSELF.DISPLAYONLYTOMCS:=TRUE;
+
+ TO_SHARE:=FALSE;
+
+
+%Start
+%%  Read_param;
+%%  Read_Config;
+
+    IF NOT GOOD_PARAMETER(EPARM,EUSER,EBASE,EPACK) THEN
+    BEGIN
+         DISPLAY("INVALID PARAMETER");
+        % DISPLAY(EPARM);
+        % DISPLAY(EUSER);
+        % DISPLAY(EBASE);
+        % DISPLAY(EPACK);
+         MYSELF.STATUS:=-1;
+    END;
+
+  %  DISPLAY("PROCESSING WITH THOSE PARAMETERS: ");
+  %  DISPLAY(DBA_USR);
+  %  DISPLAY(DBA_NAM);
+  %  DISPLAY(DBA_PCK);
+  %  DISPLAY(SAUDITNO);
+
+    RP PT(DBA_TIT) BY " " FOR 60;
+
+    PB:=PT(DBA_TIT);
+
+    IF EUSER EQL "*" THEN RP PB:PB BY "*" ELSE
+    IF EUSER NEQ " " THEN RP PB:PB BY "(",EUSER UNTIL = " ",")";
+
+    RP PB:PB BY "DESCRIPTION/",EBASE UNTIL = " ";
+
+    IF EPACK NEQ " " THEN RP PB:PB BY " ON ",EPACK UNTIL = " ";
+
+    RP PB:PB BY ".";
+    DISPLAY(PT(DBA_TIT));
+    RP FDBA.TITLE BY POINTER(DBA_TIT);
+
+    IF NOT FDBA.RESIDENT THEN
+    BEGIN
+         PB:=PT(DBA_TIT);
+         RP PB:PB BY "DESCRIPTION/",EBASE UNTIL = " ";
+         IF EPACK NEQ " " THEN RP PB:PB BY " ON ",EPACK UNTIL = " ";
+         RP PB:PB BY ".";
+
+         RP FDBA.TITLE BY POINTER(DBA_TIT);
+
+         IF NOT FDBA.RESIDENT THEN
+         BEGIN
+            RP PT(MSG_ARR) BY PT(DBA_TIT) UNTIL =".",48"00";
+            DISPLAY(PT(MSG_ARR));
+            DISPLAY("NO DESCRIPTION FILE");
+            MYSELF.STATUS:=-1;
+         END;
+    END;
+
+    FDBA.OPEN:=TRUE;
+
+    IF FDBA.FILEKIND NEQ VALUE(DASDLDATA) THEN
+    BEGIN
+         DISPLAY("INVALID DESCRIPTIONFILE");
+         MYSELF.STATUS:=-1;
+    END;
+
+
+%----------------------------------------------------------------
+
+    SCAN POINTER(DBA_USR) for param_length:100 until = " ";
+    param_length := 100-param_length;
+    us_name := string(DBA_USR,param_length);
+    %
+    SCAN POINTER(DBA_NAM) for param_length:100 until = " ";
+    param_length := 100-param_length;
+    db_name := string(DBA_NAM,param_length);
+    %
+    SCAN POINTER(DBA_PCK) for param_length:100 until = " ";
+    param_length := 100-param_length;
+    db_pack := string(DBA_PCK,param_length);
+
+   % aud_pck:="BBLTS1";
+
+    IF US_NAME NEQ 48"00" THEN
+       Replace dmsup_namep:= pointer(dmsup_name) by
+          "(", us_name, ")",
+          "DMSUPPORT/", db_name,
+          " ON ", db_pack, "."
+    ELSE
+       Replace dmsup_namep:= pointer(dmsup_name) by
+          "DMSUPPORT/", db_name, " ON ", db_pack, ".";
+
+    replace Dmsupport.title by dmsup_namep;
+
+   IF NOT READ_STRUCTURES THEN
+   BEGIN
+       DISPLAY("ERROR WHEN CREATING THE DATABASE DATASET LIST");
+       MYSELF.STATUS:=-1;
+   END;
+
+    DISPLAY("CHECKING STRUCTURES " );
+    I:=0;
+    WHILE I LEQ ISTRS DO
+    BEGIN
+        DISPLAY(POINTER(STRS[I,0]));
+        REPLACE POINTER(STRAUX) BY " " FOR 18;
+        REPLACE POINTER(STRAUX) BY POINTER(STRS[I,0]) UNTIL EQL 48"00";
+        IF GET_STR_NUM(STRAUX) = 0 THEN
+        BEGIN
+             DISPLAY("  >> STRUCTURE NOT AVAILABLE");
+             MYSELF.STATUS:=-1;
+        END;
+        I:=I+1;
+    END;
+
+
+  Initialise_Auditor_File;
+  Open_Audit;
+  Process_Audit;
+  DISPLAY("NUMBER OF EXTRACTED RECORDS: " CAT
+       STRING(RECORDCNT,*));
+  DISPLAY("CREATES: " CAT STRING(DSCCNT,*));
+  DISPLAY("CREATES ROLLED BACK: " CAT STRING(DSCRBCNT,*));
+  DISPLAY("UPDATES: " CAT STRING(DSMCNT,*));
+  DISPLAY("UPDATES ROLLED BACK: " CAT STRING(DSMRBCNT,*));
+  DISPLAY("DELETES: " CAT STRING(DSDCNT,*));
+  DISPLAY("DELETES ROLLED BACK: " CAT STRING(DSDRBCNT,*));
+
+  End_Auditor_File;
+end.

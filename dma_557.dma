@@ -1,0 +1,2058 @@
+% VERSION  1.12  ; SAVED 20191028 07:24:02                    |DCK
+ $ SET LEVEL 2 LINEINFO INSTALLATION 1
+ $SET TADS
+ $ PAGE
+PROCEDURE DBA556(PAR_ARR);
+          ARRAY  PAR_ARR[*];
+BEGIN
+EBCDIC ARRAY
+    EPARM[0] = PAR_ARR;
+
+FILE
+    FDBA(KIND=DISK,MAXRECSIZE=256,BUFFERS=5),
+%    FDIC(KIND=DISK,MAXRECSIZE= 14,BLOCKSIZE=420),
+%    FOUT(KIND=DISK,MAXRECSIZE= 16,BLOCKSIZE=320),
+%    FTAB(KIND=DISK,MAXRECSIZE= 16,BLOCKSIZE=320);
+
+%FILE FDEF(KIND=DISK, MAXRECSIZE=15, BLOCKSIZE=150,
+%                  PROTECTION=PROTECTED);
+
+ARRAY         AOUT[0: 30],
+              STRNAME[0:3],
+              FILE_TIT[0:  9];
+
+POINTER       POUT,
+              P1;
+
+LONG ARRAY
+    BL0_ARR[0: 0],              % BLOCK ZERO
+    BLB_ARR[0: 0];              % BLOCK DATA BASE
+
+REAL ARRAY
+    DIC_ARR[0:5999,0:13],
+    STR_ARR[0: 999,0: 2];
+
+REAL ARRAY
+    OUT_ARR[0: 21],             % LIGNE D'IMPRESSION
+    TAB_ARR[0: 21],             % LIGNE TABLE DES MATIERES
+    TT1_ARR[0: 21],             % LIGNE TITRE-1
+    TT2_ARR[0: 21],             % LIGNE TITRE-2
+    TT3_ARR[0: 21],             % LIGNE TITRE-3
+    MSG_ARR[0: 19],             % DISPLAY
+    ONE_ARR[0:  0],             % BLOCK FIRST WORD
+    DBA_TIT[0:  9],             % TITLE DESCRIPTION FILE
+    DBA_NAM[0:  2],             % DATABASE NAME
+    DBA_USR[0:  1],             % DATABASE USER
+    DBA_PCK[0:  2],             % DATABASE PACK
+    OUT_TIT[0:  9],             % TITLE IMAGE DASDL
+    DIC_TIT[0:  9],             % TITLE DICTIONNARY FILE
+    OFF_ARR[0: 99];             % OFFSET PAR LEVEL
+
+EBCDIC ARRAY
+    EUSER[0] = DBA_USR,         % DESCRIPTION FILE USER
+    EBASE[0] = DBA_NAM,         % BASE NAME
+    EPACK[0] = DBA_PCK;         % DESCRIPTION FILE PACK
+
+TRUTHSET
+    QUOPNT(48"7F4B"),
+    CHIFFRES("0123456789"),
+    WHERECHR(48"160B1521181E1F00"),
+    ALPDIG("ABCDEFGHIJKLMNOPQRSTUVWXYZ-/0123456789");
+
+TRANSLATETABLE
+    LOWUP(EBCDIC                       TO
+          EBCDIC,
+          "abcdefghijklmnopqrstuvwxyz" TO
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+
+POINTER
+    PA,
+    PB,
+    PC,
+    PW;
+
+LABEL
+    EXIT;
+
+DEFINE
+    NODEBLOCK = 47:16 #,        % NODE: NUMERO DE BLOCK
+    NODESTRLS = 31:16 #,        % NODE: INDICE ADDR LIST
+    NODEPROLS = 15:16 #;        % NODE: INDICE ADDR LIST
+
+DEFINE
+    PT = POINTER #,
+    RP = REPLACE #;
+
+DEFINE
+    WOUT = BEGIN
+                OUT_ADD:=* + 1;
+                WRITE(FOUT[OUT_ADD],16,OUT_ARR);
+                RP PT(OUT_ARR) BY " " FOR 132;
+           END #;
+ $ PAGE
+FORMAT
+    FEXT(X24,"EXTENDED,"),
+    FAVR(X24,"AVERAGE RECORD  =",I9,",                ",X5),
+    FMEM(X24,"MEMORY RESIDENT =      ALL,             ",X9),
+    FBLK(X24,"BLOCKSIZE       =",I9," RECORDS,        ",X5),
+    FSBB(X24,"SUBBLOCK        =",I9," RECORDS,        ",X5),
+    FTBL(X24,"TABLESIZE       =",I9," ENTRIES,        ",X5),
+    FLDF(X24,"LOADFACTOR      =",I9,",%               ",X5),
+    FASZ(X24,"AREASIZE        =",I9," RECORDS,        ",X5),
+    FAZZ(X24,"AREASIZE        =",I9," TABLES,         ",X5),
+    FROW(X24,"AREAS           =",I9,",                ",X5),
+    FPOP(X24,"POPULATION      =",I9,",                ",X5),
+    FBUF(X24,"BUFFERS         =",I9,"                 ",X5),
+    FSBF(X24,"                +",I9," PER RANDOM USER ",X5),
+    FRBF(X24,"               OR",I9," PER SERIAL USER;",X5);
+
+INTEGER
+    S,
+    NA,
+    NB,
+    NW,
+    SEQ_NUM,
+    OUT_ADD,
+    NOF_DIC,
+    RED_ADD,                  % ADRESSE DESCRIPTION FILE
+    RED_REC,                  % NOMBRE RECORDS D'UN BLOCK
+    RED_LEN,                  % LONGUEUR D'UN BLOCK
+    RED_IDX,                  % POSITION D'UN BLOCK
+    RED_KDX,                  % INDICE BOUCLE BLOCK
+    WRD_ADD,                  % INDICE DANS UN BLOCK
+    TXT_BAS,                  % INDICE DEBUT TEXTE DATA BASE
+    NOF_BLK,                  % NOMBRE DE BLOCKS
+    BLB_TXT,                  % BASE TEXT BLOCK
+    BEG_BLK,                  % INDICE DEBUT ADD BLOCK
+    BLK_DBA,                  % NUMERO BLOCK DATA BASE       G
+    LST_DBA,                  % DEBUT LISTE DATA BASE        G
+    PRP_DBA,                  % DEBUT PROPERTIES DATA BASE   G
+    NOF_STR,                  % NOMBRE DE STRUCTURES         G
+    NOF_CHR;                  % NOMBRE DE CARACTERES
+
+	
+STRING
+    SWORK,
+    SUSER,
+    SBASE,
+    SPACK;
+
+	
+ $ INCLUDE PROPERTIES = "DATABASE/DMS591/PROPERTIES" 20000000-21999999
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%               VERIFICATION DU PARAMETRE                %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+BOOLEAN PROCEDURE GOOD_PARAMETER(EPARM,EUSER,EBASE,EPACK);
+        EBCDIC ARRAY  EPARM[0], %-----> PARAMETRE D'ENTREE
+                      EUSER[0], %-----> USER [0:11]
+                      EBASE[0], %-----> BASE [0:17]
+                      EPACK[0]; %-----> PACK [0:17]
+BEGIN
+INTEGER
+    NA;
+
+POINTER
+    PA;
+
+LABEL
+    EXIT;
+
+TRUTHSET
+    CHAR("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-/");
+
+    SUSER:=EMPTY;
+    SBASE:=EMPTY;
+    SPACK:=EMPTY;
+
+    REPLACE EUSER BY " " FOR 12;
+    REPLACE EBASE BY " " FOR 18;
+    REPLACE EPACK BY " " FOR 18;
+
+    SCAN PA:EPARM UNTIL = 48"00";
+    IF NA:=OFFSET(PA) EQL 0 THEN GO EXIT;
+
+    SWORK:=TAIL(STRING(EPARM,NA)," ");
+    IF LENGTH(SWORK) LSS 2 THEN GO EXIT;
+
+%    IF TAKE(SWORK,2) NEQ "DB" THEN GO EXIT;
+
+%    SWORK:=TAIL(DROP(SWORK,2)," ");
+%    IF LENGTH(SWORK) LSS 1 THEN GO EXIT;
+
+%    IF TAKE(SWORK,1) EQL "=" THEN
+%    BEGIN
+%         SWORK:=TAIL(SWORK,"= ");
+%         IF LENGTH(SWORK) LSS 1 THEN GO EXIT;
+%    END;
+
+    IF TAKE(SWORK,1) EQL "*" THEN
+    BEGIN
+         SUSER:="*";
+         SWORK:=TAIL(DROP(SWORK,1)," ");
+         IF LENGTH(SWORK) LSS 1 THEN GO EXIT;
+    END ELSE
+    IF TAKE(SWORK,1) EQL "(" THEN
+    BEGIN
+         SWORK:=TAIL(DROP(SWORK,1)," ");
+         IF LENGTH(SWORK) LSS  1  THEN GO EXIT;
+
+         SUSER:=HEAD(SWORK,CHAR);
+         IF LENGTH(SUSER) GTR  12 THEN GO EXIT;
+
+         SWORK:=TAIL(DROP(SWORK,LENGTH(SUSER))," ");
+         IF LENGTH(SWORK) LSS  1  THEN GO EXIT;
+         IF TAKE(SWORK,1) NEQ ")" THEN GO EXIT;
+
+         SWORK:=TAIL(DROP(SWORK,1)," ");
+         IF LENGTH(SWORK) LSS  1  THEN GO EXIT;
+    END;
+
+    SBASE:=HEAD(SWORK,CHAR);
+    IF LENGTH(SBASE) GTR 18 THEN GO EXIT;
+
+    SWORK:=TAIL(DROP(SWORK,LENGTH(SBASE))," ");
+
+    IF LENGTH(SWORK) GTR 0 THEN
+    BEGIN
+         IF LENGTH(SWORK) LSS   4  THEN GO EXIT;
+         IF TAKE(SWORK,2) NEQ "ON" THEN GO EXIT;
+
+         SWORK:=TAIL(DROP(SWORK,2)," ");
+         IF LENGTH(SWORK) LSS   1  THEN GO EXIT;
+
+         SPACK:=HEAD(SWORK,CHAR);
+         IF LENGTH(SPACK) GTR  18  THEN GO EXIT;
+
+         SWORK:=TAIL(DROP(SWORK,LENGTH(SPACK))," ");
+         IF LENGTH(SWORK) NEQ   0  THEN GO EXIT;
+    END;
+
+    REPLACE EUSER BY SUSER;
+    REPLACE EBASE BY SBASE;
+    REPLACE EPACK BY SPACK;
+
+    GOOD_PARAMETER:=TRUE;
+
+EXIT:
+END;
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                   LECTURE D'UN BLOCK                   %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+PROCEDURE READ_BLOCK(GET_ARR,DEF_ADD);
+          VALUE         DEF_ADD;
+          INTEGER       DEF_ADD;
+          ARRAY         GET_ARR[0];
+BEGIN
+    READ(FDBA[DEF_ADD],1,ONE_ARR);
+
+    RED_REC:=ONE_ARR[DESCBLOCKRECS];
+    RED_LEN:=ONE_ARR[DESCBLOCKRECS] * 256 - 1;
+    RED_IDX:=0;
+
+    RESIZE(GET_ARR,RED_LEN,DISCARD);
+
+    FOR RED_KDX:=1 STEP 1 UNTIL RED_REC DO
+    BEGIN
+         READ(FDBA[DEF_ADD],256,GET_ARR[RED_IDX]);
+         RED_IDX:=* + 256;
+         DEF_ADD:=* + 1;
+    END;
+
+    TXT_BAS:=GET_ARR[TEXTBASELOC];
+END;
+$ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%              PRISE DES NOM DES STRUCTURES              %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+PROCEDURE GET_NAMES;
+BEGIN
+LONG ARRAY
+    BLS_ARR[0:0];
+
+INTEGER
+    STR_ADD,
+    STR_NUM,
+    BLK_STR,
+    LST_STR,
+    PRP_STR;
+
+POINTER
+    PA,
+    PB;
+
+LABEL
+    LOOP_STR,
+    EXIT;
+
+    S:=0;
+
+LOOP_STR:
+    IF S:=* + 1 GTR NOF_STR THEN GO EXIT;
+
+    STR_ADD:=LST_DBA + S;
+    BLK_STR:=BLB_ARR[STR_ADD].[NODEBLOCK];
+    LST_STR:=BLB_ARR[STR_ADD].[NODESTRLS];
+    PRP_STR:=BLB_ARR[STR_ADD].[NODEPROLS];
+
+    WRD_ADD:=BEG_BLK + BLK_STR;
+    RED_ADD:=BL0_ARR[WRD_ADD];
+    READ_BLOCK(BLS_ARR,RED_ADD);
+
+    IF BLS_ARR[PRP_STR + LEVELF ] EQL 0 THEN GO LOOP_STR;
+    IF BLS_ARR[PRP_STR + DELETED] EQL 1 THEN GO LOOP_STR;
+
+    STR_NUM:=BLS_ARR[PRP_STR + STRUCTURENUM];
+    NOF_CHR:=BLS_ARR[PRP_STR + IDENTIFIERSZ];
+    PA     :=PT(BLS_ARR[PRP_STR + WORDONE]) + 1;
+    PB     :=PT(STR_ARR[STR_NUM,*]);
+
+    RP PB BY PA FOR NOF_CHR," " FOR 18-NOF_CHR;
+
+    GO LOOP_STR;
+
+EXIT:
+END;
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                 ECRITURE D'UN DATA SET                 %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+PROCEDURE WRITE_DATASET(S,F);
+          VALUE         S,F;
+          INTEGER       S,F;
+BEGIN
+LONG ARRAY
+    BLS_ARR[0: 0];            % BLOCK STRUCTURE
+
+REAL ARRAY
+    SAV_ARR[0: 19,0 :9,0:21],
+    SAV_FLG[0: 19],
+    STR_NAM[0:  2],           % STRUCTURE NAME
+    STR_DSC[0:  5],           % STRUCTURE DESCRIPTION
+    ITM_NAM[0:  3],
+    IDX_NAM[0:  3];           % STRUCTURE NAME
+
+REAL ARRAY
+    WWHR[0:2];
+
+EBCDIC ARRAY
+    EWHR[0] = WWHR;
+
+POINTER
+    PA,
+    PB,
+    PC,
+    PW;
+
+LABEL
+    EXIT;
+
+REAL
+    LD;
+
+INTEGER
+    I,
+    L,
+    X,
+    K,
+    N,
+    M,
+    D,
+    Q,
+    LV;
+
+INTEGER
+    OLD_LEV,
+    OLD_TYP,
+    NOF_CDS,                  % NOMBRE BLOCKS COMPACT
+    IDX_CDS,                  % INDICE LECTURE COMPACT
+    MAX_BLK,                  % MAXIMUM NOF BLOCKS
+    MAX_LEV,                  % LEVEL MAXIMUM INDEX
+    TOT_SEC,                  % TOTAL SEGMENTS
+
+    NOF_VAR,                  % NOMBRE TYPES VARIABLES
+
+    STR_ADD,                  % DEBUT STRUCTURE DANS BLOCK 0
+    BLK_STR,                  % NUMERO BLOCK STRUCTURE
+    LST_STR,                  % DEBUT LISTE STRUCTURE
+    PRP_STR,                  % DEBUT PROPERTIES STRUCTURE
+    LST_ITM,
+    PRP_ITM,
+ $ PAGE
+    STR_NUM,                  % STRUCTURE NUMBER
+    STR_TYP,                  % STRUCTURE TYPE
+    STR_SBT,                  % STRUCTURE SUBTYPE
+    STR_LEV,                  % VARIALBLE STRUCTURE
+    STR_VAR,                  % VARIALBLE STRUCTURE
+    STR_RST,                  % RESTART DATASET
+    STR_RSZ,                  % STRUCTURE RECORD SIZE
+    STR_AVR,                  % STRUCTURE AVR RECSIZE
+    STR_BSZ,                  % STRUCTURE BLOCK SIZE
+    STR_POP,                  % STRUCTURE POPULATION
+    STR_TVA,                  % REC TYPE SIZE IN BITS
+    STR_ASG,                  % STRUCTURE AREASIZE SEG
+    STR_LFC,                  % LOADFACTOR
+    STR_RWA,                  % DECLARED NOF ROWS
+    STR_RWE,                  % NOF EXTRA ROWS
+    STR_TSZ,                  % TABLE SIZE
+    STR_TSG,                  % TABLE SIZE IN SEG
+    STR_ESZ,                  % KEY ENTRY SIZE
+    STR_ASZ,                  % AREASIZE SEG
+    STR_BSG,                  % BLOCKSIZE SEG
+
+    NUL_ADD,
+    NUL_SIZ,
+    INT_ADD,
+    INT_SIZ,
+
+    ITM_NOD,                  % INDICE ADD TETE LISTE ITEMS
+    ITM_ADD,                  % INDICE ADD TETE POPPS ITEMS
+    ITM_PTR,                  % INDICE ADD DANS LISTE ITEMS
+    ITM_TYP,                  % TYPE ITEM
+    ITM_CHR,                  % NBR CARACTERES ITEM
+    ITM_OFF,                  % LONGUEUR ITEM
+    ITM_LNG,                  % LONGUEUR ITEM
+    ITM_SIZ,                  % LONGUEUR ITEM
+    ITM_OCC,                  % OCCURS ITEM
+    ITM_SIG,                  % ITEM SIGNE
+    ITM_DEC,                  % NOMBRE DE DECIMALES ITEM
+    ITM_LEV,                  % NIVEAU ITEM
+    ITM_VTP,
+    ITM_NUL,
+    ITM_INT,
+    ITM_VAR,
+    OLD_VAR,
+    NOF_ITM,                  % NOMBRE D'ITEMS
+    DMS_OFF,
+
+    DEP_ADD,
+    DEP_CHR,
+
+    LST_IDX,
+    NOF_IDX,
+    BLK_IDX,
+    PRP_IDX,
+    IDX_ADD,
+    IDX_NUM,
+    IDX_TYP,
+    IDX_SBT,
+ $ PAGE
+    LST_KEY,
+    NOF_KEY,
+    KEY_NOD,
+    LST_DAT,
+    NOF_DAT,
+    DAT_NOD,
+
+    WHR_ADD,
+    WHR_LEN,
+    WHR_LEV,
+
+    VRC_WRD,                  % VALID RECORD WORDS
+    VRC_TYP,                  % VALID RECORD TYPE
+    VRC_OFF,                  % VALID RECORD OFFSET
+    VRC_LEN,                  % VALID RECORD LENGHT
+
+    VAR_NOD,                  % VARIABLE NODE
+    VAR_PTR,                  %
+    VAR_ADD,                  %
+    VAR_NUM,                  %
+    VAR_LEN,                  %
+
+    VAL_MOD;                  %
+
+BOOLEAN
+    BEXT;
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%             IMPRESSION DES CLES D'UN INDEX             %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+PROCEDURE WRITE_KEY;
+BEGIN
+LABEL
+    LOOP_ITEM,
+    EXIT;
+
+    KEY_NOD:=BLS_ARR[PRP_IDX + KEYNODE     ];
+    LST_KEY:=BLS_ARR[KEY_NOD].[NODESTRLS];
+    NOF_KEY:=BLS_ARR[LST_KEY];
+
+    K:=0;
+
+    RP PT(OUT_ARR)    BY " " FOR 132;
+    RP PT(OUT_ARR)+24 BY "KEY IS (";
+    WOUT;
+
+LOOP_ITEM:
+
+    RP PT(AOUT) BY " " FOR 90;
+    POUT:=PT(AOUT);
+
+    IF K:=* + 1 GTR NOF_KEY THEN
+    BEGIN
+         IF IDX_TYP EQL 6 THEN
+         BEGIN
+              IF BLS_ARR[PRP_IDX + SCRAMBLEMODULUS] EQL 0 THEN
+              BEGIN
+                   RP PT(OUT_ARR) BY " " FOR 31,");"," " FOR 57;
+                   WOUT;
+              END ELSE
+              BEGIN
+                   RP PT(OUT_ARR) BY " " FOR 31,") "," " FOR 57;
+                   WOUT;
+                   RP PT(OUT_ARR) BY " " FOR 24,"MODULUS         =",
+                      BLS_ARR[PRP_IDX + SCRAMBLEMODULUS] FOR 9 NUMERIC,
+                      ";";
+                   WOUT;
+              END;
+         END ELSE
+         BEGIN
+              RP PT(OUT_ARR) BY " " FOR 31,") "," " FOR 57;
+              WOUT;
+         END;
+
+         GO EXIT;
+    END;
+
+    ITM_ADD:=BLS_ARR[LST_KEY + K].KEYITEMNUM;
+    ITM_ADD:=ITM_ADD + LST_ITM;
+    ITM_ADD:=BLS_ARR[ITM_ADD].[NODEPROLS];
+
+    IF BLS_ARR[ITM_ADD + DUPNAMEB] GTR 0 THEN GO LOOP_ITEM;
+
+    ITM_CHR:=BLS_ARR[ITM_ADD + IDENTIFIERSZ];
+
+    RP PT(OUT_ARR) BY " " FOR 132;
+
+    PA:=PT(OUT_ARR) + 32;
+
+    RP PA BY PT(BLS_ARR[ITM_ADD + 2]) + 1 FOR ITM_CHR;
+
+    RP POUT:POUT BY "IK#",
+                    PT(STRNAME) UNTIL EQL " ",
+                    "#",
+                    PT(BLS_ARR[ITM_ADD + 2]) + 1 FOR ITM_CHR,
+                    "#";
+
+    PA:=PT(OUT_ARR) + 50;
+
+    IF BLS_ARR[LST_KEY + K].KDESC EQL 1
+       THEN RP PA:PA BY "DESCENDING"
+       ELSE RP PA:PA BY "ASCENDING";
+
+    IF BLS_ARR[LST_KEY + K].KDESC EQL 1
+       THEN RP POUT:POUT BY  "DESCENDING#"
+       ELSE RP POUT:POUT BY  "ASCENDING#";
+
+    IF K NEQ NOF_KEY THEN RP PA BY ",";
+
+    WOUT;
+
+    WRITE(FDEF, 90, PT(AOUT));
+
+    GO LOOP_ITEM;
+
+EXIT:
+END;
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%           IMPRESSION DES KEY DATA D'UN INDEX           %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+PROCEDURE WRITE_DAT;
+BEGIN
+LABEL
+    LOOP_ITEM,
+    EXIT;
+
+    IF BLS_ARR[PRP_IDX + KEYDATANODE] EQL 0 THEN GO EXIT;
+
+    DAT_NOD:=BLS_ARR[PRP_IDX + KEYDATANODE];
+    LST_DAT:=BLS_ARR[DAT_NOD].[NODESTRLS];
+    NOF_DAT:=BLS_ARR[LST_DAT];
+
+    RP PT(OUT_ARR)    BY " " FOR 132;
+    RP PT(OUT_ARR)+24 BY "DATA   (";
+    WOUT;
+
+    K:=0;
+
+LOOP_ITEM:
+
+    POUT:=PT(AOUT);
+    RP PT(AOUT) BY " " FOR 90;
+    RP POUT:POUT BY "ID#",
+                    PT(STRNAME) WHILE NEQ " ",
+                    "#";
+
+    IF K:=* + 1 GTR NOF_DAT THEN
+    BEGIN
+         RP PT(OUT_ARR) BY " " FOR 31,")"," " FOR 58;
+         WOUT;
+         GO EXIT;
+    END;
+
+    ITM_ADD:=BLS_ARR[LST_DAT + K].KEYITEMNUM;
+    ITM_ADD:=ITM_ADD + LST_ITM;
+    ITM_ADD:=BLS_ARR[ITM_ADD].[NODEPROLS];
+
+    IF BLS_ARR[ITM_ADD + DUPNAMEB] GTR 0 THEN GO LOOP_ITEM;
+
+    ITM_CHR:=BLS_ARR[ITM_ADD + IDENTIFIERSZ];
+
+    RP PT(OUT_ARR) BY " " FOR 132;
+
+    PA:=PT(OUT_ARR) + 32;
+
+    RP PA:PA BY PT(BLS_ARR[ITM_ADD + 2]) + 1 FOR ITM_CHR;
+
+    RP POUT:POUT BY PT(BLS_ARR[ITM_ADD + 2]) + 1 FOR ITM_CHR,
+                    "#";
+    WRITE(FDEF, 90, PT(AOUT));
+
+    IF K NEQ NOF_DAT THEN RP PA BY ",";
+    WOUT;
+    GO LOOP_ITEM;
+
+EXIT:
+END;
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%         IMPRESSION DES CONDITIONS D'UN SUBSET          %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+PROCEDURE WRITE_WHERE;
+BEGIN
+LABEL
+    LOOP_SCAN,
+    FIND_ITEM,
+    EXIT;
+
+    ON ANYFAULT, BEGIN GO EXIT; END;
+
+    RP PT(OUT_ARR) BY " " FOR 24,"WHERE "," " FOR 60;
+
+    WHR_LEN:=BLS_ARR[PRP_IDX + WHERELISTSZ];
+    WHR_ADD:=BLS_ARR[PRP_IDX + WHERELIST];
+    WHR_LEV:=0;
+
+    PA:=PT(OUT_ARR)+30;
+    PW:=PT(BLS_ARR[WHR_ADD]);
+    NW:=WHR_LEN * 6;
+
+    POUT:=PT(AOUT);
+    RP PT(AOUT) BY " " FOR 90;
+    RP POUT:POUT BY "IW#",
+                    PT(STRNAME) WHILE NEQ " ",
+                    "#";
+
+    GO FIND_ITEM;
+
+LOOP_SCAN:
+    IF NW GTR 3 THEN
+    BEGIN
+         IF PW EQL 48"000F" THEN
+         BEGIN
+              RP PA:PA BY "( ";
+              PW:=PW + 2;
+              NW:=NW - 2;
+              WOUT;
+              WHR_LEV:=* + 1;
+              RP PT(OUT_ARR) BY " " FOR 132;
+              PA:=PT(OUT_ARR)+30;
+              PA:=PA + WHR_LEV;
+              GO LOOP_SCAN;
+         END;
+         IF PW EQL 48"0010" THEN
+         BEGIN
+              WOUT;
+              WHR_LEV:=* - 1;
+              RP PT(OUT_ARR) BY " " FOR 132;
+              PA:=PT(OUT_ARR)+30;
+              PA:=PA + WHR_LEV;
+              RP PA:PA BY ") ";
+              PW:=PW + 2;
+              NW:=NW - 1;
+              GO LOOP_SCAN;
+         END;
+    END;
+
+%    SCAN PW:PW FOR NW:NW WHILE = 48"00";
+
+    IF NW EQL 0      THEN GO EXIT;
+    IF PW EQL 48"0A" THEN GO EXIT;
+
+
+
+FIND_ITEM:
+
+    RP EWHR BY PW FOR 4;
+
+    CASE WWHR[0].[47:4] OF
+    BEGIN
+         00:
+            PW := * + 1;
+            NW := * - 1;
+            CASE REAL(PW,1) OF
+            BEGIN
+               4"16": RP PA:PA BY "EQL ";
+                      RP POUT:POUT BY " EQL ";
+                      PW:=PW + 1;
+                      NW:=NW - 1;
+                      GO LOOP_SCAN;
+
+               4"0B": RP PA:PA BY "LSS ";
+                      RP POUT:POUT BY " LSS ";
+                      PW:=PW + 1;
+                      NW:=NW - 1;
+                      GO LOOP_SCAN;
+
+               4"15": RP PA:PA BY "GTR ";
+                      RP POUT:POUT BY " GTR ";
+                      PW:=PW + 1;
+                      NW:=NW - 1;
+                      GO LOOP_SCAN;
+
+               4"20": RP PA:PA BY "<= ";
+                      RP POUT:POUT BY " <= ";
+                      PW:=PW + 1;
+                      NW:=NW - 1;
+                      GO LOOP_SCAN;
+
+               4"21": RP PA:PA BY "NEQ ";
+                      RP POUT:POUT BY " NEQ ";
+                      PW:=PW + 1;
+                      NW:=NW - 1;
+                      GO LOOP_SCAN;
+
+               4"22": RP PA:PA BY ">= ";
+                      RP POUT:POUT BY " >= ";
+                      PW:=PW + 1;
+                      NW:=NW - 1;
+                      GO LOOP_SCAN;
+
+               4"18": RP PA:PA BY "NOT ";
+                      RP POUT:POUT BY " NOT ";
+                      PW:=PW + 1;
+                      NW:=NW - 1;
+                      GO LOOP_SCAN;
+
+               4"1E": RP PA:PA BY "AND ";
+                      RP POUT:POUT BY " AND ";
+
+                      WOUT;
+                      RP PT(OUT_ARR) BY " " FOR 132;
+                      PA:=PT(OUT_ARR)+30;
+                      PA:=PA + WHR_LEV;
+                      PW:=PW + 1;
+                      NW:=NW - 1;
+                      GO LOOP_SCAN;
+
+               4"1F": RP PA:PA BY "OR ";
+                      RP POUT:POUT BY " OR ";
+
+                      WOUT;
+                      RP PT(OUT_ARR) BY " " FOR 132;
+                      PA:=PT(OUT_ARR)+30;
+                      PA:=PA + WHR_LEV;
+                      PW:=PW + 1;
+                      NW:=NW - 1;
+                      GO LOOP_SCAN;
+
+               ELSE : ;
+            END;
+            GO LOOP_SCAN;     %JB 28/6/10
+         01:
+         02: ITM_ADD:=LST_ITM + WWHR[0].[43:12];
+             ITM_ADD:=BLS_ARR[ITM_ADD].[NODEPROLS];
+             ITM_CHR:=BLS_ARR[ITM_ADD + IDENTIFIERSZ];
+             RP PA:PA BY PT(BLS_ARR[ITM_ADD+2])+1
+                         FOR ITM_CHR," ";
+
+             RP POUT:POUT BY PT(BLS_ARR[ITM_ADD+2])+1
+                         FOR ITM_CHR;
+
+             PW:=PW + 4;
+             NW:=NW - 4;
+
+             IF PW EQL 48"4003" THEN
+             BEGIN
+                  RP PW BY 48"0000";
+                  RP PA:PA BY "MOD ";
+             END;
+
+             SCAN PW:PW FOR NW:NW UNTIL IN WHERECHR;
+             GO LOOP_SCAN;
+
+         10: ITM_CHR:=WWHR[0].[43:12];
+             PW:=PW + 2;
+             NW:=NW - 2;
+             RP PA:PA BY """,PW FOR ITM_CHR,"""," ";
+
+             RP POUT:POUT BY """,PW FOR ITM_CHR,""";
+
+             PW:=PW + ITM_CHR;
+             NW:=NW - ITM_CHR;
+             IF PW EQL 48"0A" THEN
+             BEGIN
+                  PW:=* + 1;
+                  NW:=* - 1;
+             END;
+             WHILE PW EQL 48"0000" DO
+             BEGIN
+                  PW:=* + 1;
+                  NW:=* - 1;
+             END;
+             SCAN PW:PW FOR NW:NW UNTIL IN WHERECHR;
+             GO LOOP_SCAN;
+
+       ELSE: ITM_CHR:=WWHR[0].[43:12];
+             PW:=PW + 4;
+             NW:=NW - 4;
+             RP PA:PA BY PW FOR ITM_CHR," ";
+
+             RP POUT:POUT BY PW FOR ITM_CHR;
+
+             PW:=PW + ITM_CHR;
+             NW:=NW - ITM_CHR;
+             IF PW EQL 48"0A" THEN
+             BEGIN
+                  PW:=* + 1;
+                  NW:=* - 1;
+             END;
+             WHILE PW EQL 48"0000" DO
+             BEGIN
+                  PW:=* + 1;
+                  NW:=* - 1;
+             END;
+             SCAN PW:PW FOR NW:NW UNTIL IN WHERECHR;
+             GO LOOP_SCAN;
+    END;
+
+EXIT:
+
+    RP POUT BY "#";
+    WRITE(FDEF, 90, PT(AOUT)) ;
+
+    WOUT;
+
+END;
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%           IMPRESSION DES INDEX D'UN DATA SET           %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+PROCEDURE WRITE_INDEX;
+BEGIN
+LABEL
+    LOOP_IDX,
+    EXIT;
+
+    IF LST_STR          EQL 0 THEN GO EXIT;
+    IF BLS_ARR[LST_STR] EQL 0 THEN GO EXIT;
+
+    NOF_IDX:=BLS_ARR[LST_STR];
+    X:=0;
+
+LOOP_IDX:
+    IF X:=* + 1 GTR NOF_IDX THEN GO EXIT;
+
+    IDX_ADD:=LST_DBA + BLS_ARR[LST_STR + X];
+    BLK_IDX:=BLB_ARR[IDX_ADD].[NODEBLOCK];
+    LST_IDX:=BLB_ARR[IDX_ADD].[NODESTRLS];
+    PRP_IDX:=BLB_ARR[IDX_ADD].[NODEPROLS];
+
+    IF BLS_ARR[PRP_IDX + LEVELF ] EQL 0 THEN GO LOOP_IDX;
+    IF BLS_ARR[PRP_IDX + DELETED] EQL 1 THEN GO LOOP_IDX;
+
+    RP PT(OUT_ARR) BY "%","-" FOR 94,"%"," " FOR 36;
+    WOUT;
+
+    RP PT(IDX_NAM) BY " " FOR 18;
+
+    NOF_CHR:=BLS_ARR[PRP_IDX + IDENTIFIERSZ];
+    PA     :=PT(BLS_ARR[PRP_IDX + WORDONE]) + 1;
+    PB     :=PT(IDX_NAM);
+
+    RP PB BY PA FOR NOF_CHR;
+
+    IDX_NUM:=BLS_ARR[PRP_IDX + STRUCTURENUM];
+    IDX_TYP:=BLS_ARR[PRP_IDX + TYPEF       ];
+    IDX_SBT:=BLS_ARR[PRP_IDX + SUBTYPEF    ];
+
+    PA:=POINTER(OUT_ARR);
+    RP PA BY " "         FOR 132;
+    RP PA:PA BY PT(IDX_NAM) FOR 18,"      ";
+
+    RP PT(TAB_ARR) BY PT(IDX_NAM) FOR 18,";",
+                      PT(IDX_NAM) FOR 18," ",
+                      " "         FOR 58;
+    WRITE(FTAB,16,TAB_ARR);
+
+    RP PT(AOUT) BY " " FOR 90;
+    POUT:=PT(AOUT);
+
+    RP POUT:POUT BY "IX#",
+                    PT(IDX_NAM) UNTIL EQL " ",
+                    "#",
+                    IDX_NUM FOR 3 DIGITS,
+                    "#";
+    RP PT(STRNAME) BY PT(IDX_NAM) FOR 18;
+
+    IF IDX_TYP EQL 6 THEN
+    BEGIN
+         RP PA BY "ACCESS TO ",PT(STR_NAM) FOR 18;
+         PA:=PT(OUT_ARR)+83;
+         RP PA BY "STRUCTURE ",IDX_NUM FOR 3 DIGITS;
+         WOUT;
+         WRITE_KEY;
+         GO LOOP_IDX;
+    END;
+
+    LD:=BLS_ARR[PRP_IDX + POPULATIONF];
+    LV:=0;
+
+    WHILE LD GEQ 1 DO
+    BEGIN
+         LD:=LD / BLS_ARR[PRP_IDX + TABLESZ];
+         LV:=* + 1;
+    END;
+
+    IF BLS_ARR[PRP_IDX + SUBSETF] EQL 0
+       THEN RP PA:PA BY "SET OF "
+       ELSE RP PA:PA BY "SUBSET OF ";
+
+    IF BLS_ARR[PRP_IDX + SUBSETF] EQL 0
+       THEN RP POUT:POUT BY "SET#"
+       ELSE RP POUT:POUT BY "SUBSET#";
+
+%    IF POINTER(IDX_NAM) = "SIDECRDELCINP"
+%         OR POINTER(IDX_NAM) = "SOPSSBSOPS" THEN
+%      DISPLAY("GotIT");
+
+    RP PA BY PT(STR_NAM) FOR 18;
+
+    PA:=PT(OUT_ARR)+50;
+    RP PA BY "% LEVELS: ",LV FOR * DIGITS;
+
+    PA:=PT(OUT_ARR)+83;
+    RP PA BY "STRUCTURE ",IDX_NUM FOR 3 DIGITS;
+    WOUT;
+ $ PAGE
+
+
+    CASE IDX_SBT OF
+    BEGIN
+         0:
+            RP POUT:POUT BY "INDEX SEQUENTIAL#";
+         1:
+            RP POUT:POUT BY "INDEX RANDOM#";
+         3:
+            RP POUT:POUT BY "ORDERED LIST#";
+         4:
+            RP POUT:POUT BY "UNORDERED LIST#";
+         6:
+            IF MYSELF.TASKVALUE EQL 0
+               THEN RP POUT:POUT BY "BIT VECTOR# # #" ;
+
+      ELSE: RP PA:PA BY "INVALID SET, ";
+    END;
+
+    IF IDX_SBT NEQ 6 THEN
+    BEGIN
+         IF BLS_ARR[PRP_IDX + DUPSFIRST] EQL 1 THEN
+              RP POUT:POUT BY  "DUPLICATES FIRST# #"
+         ELSE IF BLS_ARR[PRP_IDX + DUPSLAST ] EQL 1 THEN
+              RP POUT:POUT BY  "DUPLICATES LAST# #"
+         ELSE IF BLS_ARR[PRP_IDX + DUPSALLOWED ] EQL 1 THEN
+              RP POUT:POUT BY  "DUPLICATES# #"
+         ELSE
+         BEGIN
+              RP POUT:POUT BY  "NO DUPLICATES#";
+              IF BLS_ARR[PRP_IDX + KEYCHANGEALLOW] NEQ 0
+                 THEN RP POUT:POUT BY  " KEYCHANGEOK#"
+                 ELSE RP POUT:POUT BY  " #";
+
+         END;
+    END;
+
+    WRITE(FDEF,90,PT(AOUT));
+    RP PT(STRNAME) BY PT(IDX_NAM) FOR 18;
+
+    IF IDX_SBT NEQ 6 THEN
+    BEGIN
+         WRITE_KEY;
+         WRITE_DAT;
+    END;
+    IF BLS_ARR[PRP_IDX + SUBSETF] NEQ 0 THEN WRITE_WHERE;
+
+    RP PT(OUT_ARR) BY " " FOR 132;
+    PA:=PT(OUT_ARR) + 24;
+
+    CASE IDX_SBT OF
+    BEGIN
+         0: RP PA:PA BY "INDEX SEQUENTIAL, ";
+
+         1: RP PA:PA BY "INDEX RANDOM, ";
+
+         3: RP PA:PA BY "ORDERED LIST, ";
+
+         4: RP PA:PA BY "UNORDERED LIST, ";
+
+         6: IF MYSELF.TASKVALUE EQL 0
+               THEN RP PA BY "BIT VECTOR;"
+               ELSE RP PA BY "BIT VECTOR,";
+
+      ELSE: RP PA:PA BY "INVALID SET, ";
+    END;
+
+    IF IDX_SBT NEQ 6 THEN
+    BEGIN
+         IF BLS_ARR[PRP_IDX + DUPSFIRST] EQL 1 THEN
+              RP PA:PA BY "DUPLICATES FIRST"
+         ELSE IF BLS_ARR[PRP_IDX + DUPSLAST ] EQL 1 THEN
+              RP PA:PA BY "DUPLICATES LAST"
+         ELSE IF BLS_ARR[PRP_IDX + DUPSALLOWED ] EQL 1 THEN
+              RP PA:PA BY "DUPLICATES"
+         ELSE
+         BEGIN
+              RP PA:PA BY "NO DUPLICATES";
+              IF BLS_ARR[PRP_IDX + KEYCHANGEALLOW] NEQ 0
+                 THEN RP PA:PA BY " KEYCHANGEOK";
+         END;
+
+         IF MYSELF.TASKVALUE EQL 0
+            THEN RP PA BY ";"
+            ELSE RP PA BY ",";
+    END;
+
+    WOUT;
+
+    IF MYSELF.TASKVALUE EQL 0 THEN GO LOOP_IDX;
+
+    IF BLS_ARR[PRP_IDX + INRESIDENTLEVEL] EQL 1 THEN
+    BEGIN
+       WRITE(OUT_ARR,FMEM);
+       WOUT;
+    END;
+ $ PAGE
+    WRITE(OUT_ARR,FTBL,BLS_ARR[PRP_IDX + TABLESZ         ]); WOUT;
+    WRITE(OUT_ARR,FLDF,BLS_ARR[PRP_IDX + LOADFACTOR      ]); WOUT;
+    WRITE(OUT_ARR,FAZZ,BLS_ARR[PRP_IDX + AREASZ          ]); WOUT;
+    WRITE(OUT_ARR,FROW,BLS_ARR[PRP_IDX + NUMROWS         ]); WOUT;
+    WRITE(OUT_ARR,FPOP,BLS_ARR[PRP_IDX + POPULATIONF     ]); WOUT;
+    WRITE(OUT_ARR,FBUF,BLS_ARR[PRP_IDX + SYSTEMBUFFERSBIG]); WOUT;
+    WRITE(OUT_ARR,FSBF,BLS_ARR[PRP_IDX + RANDOMBUFFERS   ]); WOUT;
+    WRITE(OUT_ARR,FRBF,BLS_ARR[PRP_IDX + SERIALBUFFERS   ]); WOUT;
+
+    GO LOOP_IDX;
+
+EXIT:
+END;
+ $ PAGE
+PROCEDURE GET_DEP(ITM);
+VALUE         ITM;
+INTEGER       ITM;
+BEGIN
+    IF ITM_TYP EQL GRP THEN
+    BEGIN
+         SAV_FLG[ITM_LEV]:=Q:=Q + 1;
+         RP  PT(SAV_ARR[ITM_LEV,Q,*]) BY " " FOR 132;
+         PA:=PT(SAV_ARR[ITM_LEV,Q,*])+50;
+    END ELSE
+    BEGIN
+         WOUT;
+         RP PT(OUT_ARR) BY " " FOR 132;
+    END;
+    DEP_ADD:=ITM;
+    DEP_ADD:=* + LST_ITM;
+    DEP_ADD:=BLS_ARR[DEP_ADD].[NODEPROLS];
+    DEP_CHR:=BLS_ARR[DEP_ADD + IDENTIFIERSZ];
+    RP PA BY "     ",PT(BLS_ARR[DEP_ADD + 2]) + 1
+                       FOR DEP_CHR;
+END;
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%           IMPRESSION DES ITEMS D'UN DATA SET           %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+PROCEDURE WRITE_ITEM;
+BEGIN
+LABEL
+    LOOP_ITEM,
+    EXIT;
+
+    ITM_NOD:=BLS_ARR[PRP_STR + DATAITEMNODE];
+    LST_ITM:=BLS_ARR[ITM_NOD].[NODESTRLS];
+    NOF_ITM:=BLS_ARR[LST_ITM];
+    OLD_VAR:=0;
+
+    I:=0;
+
+LOOP_ITEM:
+
+    REPLACE PT(AOUT) BY " " FOR 90;
+    POUT:=PT(AOUT);
+    RP POUT:POUT BY "FL#",
+                    PT(STRNAME) WHILE NEQ " ",
+                    "#";
+
+    IF I:=* + 1 GTR NOF_ITM THEN GO EXIT;
+
+    ITM_ADD:=LST_ITM + I;
+    ITM_ADD:=BLS_ARR[ITM_ADD].[NODEPROLS];
+
+    IF BLS_ARR[ITM_ADD + DUPNAMEB] GTR 0 AND
+       BLS_ARR[ITM_ADD + VFTYPE  ] EQL 0 THEN GO LOOP_ITEM;
+
+    IF BLS_ARR[ITM_ADD + TYPEF] EQL 5 THEN
+       IF STR_SBT EQL 4 THEN GO LOOP_ITEM;
+
+    IF BLS_ARR[ITM_ADD + TYPEF] EQL 2 THEN
+    BEGIN
+         IF STR_SBT NEQ 4 THEN
+            WRITE_DATASET(BLS_ARR[ITM_ADD + STRUCTNUM],2);
+         GO LOOP_ITEM;
+    END;
+
+    ITM_TYP:=BLS_ARR[ITM_ADD + TYPEF              ];
+    ITM_CHR:=BLS_ARR[ITM_ADD + IDENTIFIERSZ       ];
+    ITM_OCC:=BLS_ARR[ITM_ADD + OCCURSMAX          ];
+    ITM_SIG:=BLS_ARR[ITM_ADD + SIGNF              ];
+    ITM_LEV:=BLS_ARR[ITM_ADD + LEVELF             ] - 1;
+    ITM_VTP:=BLS_ARR[ITM_ADD + VARIATIONTYPE      ];
+    ITM_VAR:=BLS_ARR[ITM_ADD + VFTYPE             ];
+
+    IF BLS_ARR[ITM_ADD + NULLTYPE] EQL 0
+       THEN ITM_NUL:=0
+       ELSE BEGIN
+                 ITM_NUL:=BLS_ARR[ITM_ADD + NULLTYPE    ];
+                 NUL_ADD:=BLS_ARR[ITM_ADD + NULLITLOC   ];
+                 NUL_SIZ:=BLS_ARR[ITM_ADD + NULLITSZ    ];
+            END;
+
+    IF BLS_ARR[ITM_ADD + INITIALDEFAULTF] EQL 1
+       THEN ITM_INT:=0
+       ELSE BEGIN
+                 ITM_INT:=BLS_ARR[ITM_ADD + INITIALTYPE ];
+                 INT_ADD:=BLS_ARR[ITM_ADD + INITIALITLOC];
+                 INT_SIZ:=BLS_ARR[ITM_ADD + INITIALITSZ ]
+            END;
+
+    IF ITM_LEV GTR OLD_LEV THEN
+    BEGIN
+         IF OLD_LEV EQL 0 AND
+            STR_SBT EQL 4 THEN ELSE
+         BEGIN
+              RP PT(OUT_ARR)         BY " " FOR 132;
+              RP PT(OUT_ARR)+OLD_LEV BY "(";
+              WOUT;
+         END;
+    END;
+ $ PAGE
+    IF ITM_LEV LSS OLD_LEV THEN
+    BEGIN
+         FOR N:=OLD_LEV - 1 STEP -1 UNTIL ITM_LEV DO
+         BEGIN
+              RP PT(OUT_ARR) BY " " FOR 132;
+              IF SAV_FLG[N] GTR 0
+                 THEN RP PT(OUT_ARR)+N BY ")"
+                 ELSE RP PT(OUT_ARR)+N BY ");";
+              WOUT;
+              FOR M:=1 STEP 1 UNTIL SAV_FLG[N] DO
+              BEGIN
+                   RP OUT_ARR BY PT(SAV_ARR[N,M,*]) FOR 132;
+                   IF M EQL SAV_FLG[N] THEN
+                      RP PT(OUT_ARR)+71 BY ";";
+                   WOUT;
+              END;
+              SAV_FLG[N]:=0;
+         END;
+    END;
+
+    IF ITM_LEV LSS OLD_LEV OR
+      (ITM_TYP EQL GRP AND OLD_TYP NEQ GRP) THEN
+    BEGIN
+         RP OUT_ARR BY " " FOR 132;
+         WOUT;
+    END;
+
+    OLD_LEV:=ITM_LEV;
+    OLD_TYP:=ITM_TYP;
+
+    IF ITM_TYP = ALPH OR
+       ITM_TYP = FILLR THEN
+    BEGIN
+         ITM_SIZ:=BLS_ARR[ITM_ADD + TOTALSZ] / 2;
+         ITM_DEC:=0;
+    END ELSE
+    BEGIN
+         ITM_SIZ:=BLS_ARR[ITM_ADD + DECLAREDLENGTH];
+         ITM_DEC:=BLS_ARR[ITM_ADD + SCALEFACTOR   ];
+    END;
+
+    IF ITM_VAR NEQ OLD_VAR THEN
+    BEGIN
+         RP PT(OUT_ARR) BY ")"," " FOR 89;
+         WOUT;
+         OLD_VAR:=ITM_VAR;
+         RP PT(OUT_ARR) BY " " FOR 132;
+         WOUT;
+         RP PT(OUT_ARR) BY ITM_VAR FOR 3 DIGITS,": (";
+         WOUT;
+    END;
+    RP POUT:POUT BY ITM_VAR FOR 3 DIGITS,
+                    "#";
+ $ PAGE
+    PA:=PT(OUT_ARR);
+    RP PA    BY " " FOR 132;
+    RP PA+24 BY """;
+    RP PA+53 BY """;
+
+    ITM_LNG:=BLS_ARR[ITM_ADD + TOTALSZ   ];
+
+    IF ITM_LEV EQL 0 THEN
+    BEGIN
+         ITM_OFF:=BLS_ARR[ITM_ADD + ITEMOFFSET];
+         DMS_OFF:=BLS_ARR[ITM_ADD + DMSOFFSET ];
+    END ELSE
+    BEGIN
+         ITM_OFF:=BLS_ARR[ITM_ADD + ITEMOFFSET] +
+                  OFF_ARR[ITM_LEV - 1];
+         DMS_OFF:=BLS_ARR[ITM_ADD + DMSOFFSET ] +
+                  OFF_ARR[ITM_LEV - 1];
+    END;
+
+    IF BEXT THEN
+    BEGIN
+         ITM_OFF:=* - 24;
+         DMS_OFF:=* - 24;
+    END;
+
+    IF ITM_LEV GTR 0 THEN
+    BEGIN
+         IF ITM_OCC GTR 0 THEN
+         BEGIN
+              IF BEXT
+                 THEN OFF_ARR[ITM_LEV]:=ITM_OFF + 24
+                 ELSE OFF_ARR[ITM_LEV]:=ITM_OFF;
+         END ELSE
+         BEGIN
+              OFF_ARR[ITM_LEV]:=OFF_ARR[ITM_LEV - 1];
+         END;
+    END;
+
+    IF ITM_OFF GEQ 0 THEN
+    BEGIN
+         RP PT(OUT_ARR)+75 BY
+            ITM_OFF        FOR 5 DIGITS,"=(",
+            ITM_OFF DIV 12 FOR 4 DIGITS,",",
+            ITM_OFF MOD 12 FOR 2 DIGITS,") ",
+            ITM_LNG        FOR 5 DIGITS;
+    END;
+
+    IF ITM_OFF NEQ DMS_OFF THEN
+       RP PT(OUT_ARR)+90 BY "*";
+
+    RP PA+ITM_LEV BY
+       PT(BLS_ARR[ITM_ADD + 2]) + 1 FOR ITM_CHR;
+
+    RP PT(ITM_NAM) BY " " FOR 18;
+    RP PT(ITM_NAM) BY
+       PT(BLS_ARR[ITM_ADD + 2]) + 1 FOR ITM_CHR;
+
+    IF BLS_ARR[ITM_ADD + OLDITEMFOUND] > 0 THEN
+    BEGIN
+         WRD_ADD:=BLS_ARR[TEXTBASELOC] +
+                  BLS_ARR[ITM_ADD + OLDITEMFOUND];
+         IF N:=BLS_ARR[WRD_ADD].[47:8] > 28 THEN N:=28;
+         RP PA+25 BY PT(BLS_ARR[WRD_ADD])+1 FOR N;
+         RP POUT:POUT BY PT(BLS_ARR[WRD_ADD])+1 FOR N,"#";
+    END
+    ELSE
+    BEGIN
+         RP POUT:POUT BY " #";
+    END;
+
+    FOR D:=0 STEP 1 UNTIL NOF_DIC DO
+        IF PA+ITM_LEV EQL PT(DIC_ARR[D,*]) FOR 17 THEN
+        BEGIN
+             RP PA+25 BY PT(DIC_ARR[D,*])+42 FOR 28;
+             D:=NOF_DIC;
+        END;
+
+    PA:=PT(OUT_ARR) + 55;
+
+    RP POUT:POUT BY PT(BLS_ARR[ITM_ADD + 2]) + 1 FOR ITM_CHR,
+                    "#";
+    RP POUT:POUT BY ITM_LEV FOR 4 DIGITS, "#";
+
+    IF BLS_ARR[ITM_ADD + TCFLD] EQL 1 THEN
+    BEGIN
+         RP PA BY          "TRANSACTION";
+         RP POUT:POUT BY "TRANSACTION# # # # #";
+
+         WRITE(FDEF,90,PT(AOUT));
+
+         WOUT;
+         RP PT(OUT_ARR) BY " " FOR 132;
+         RP PA          BY "COUNT           ;";
+         WOUT;
+         GO LOOP_ITEM;
+    END;
+
+    IF BLS_ARR[ITM_ADD + RSFLD] EQL 1 THEN
+    BEGIN
+         RP PA BY          "RESTART TYPE    ;";
+         RP POUT:POUT BY "RESTART TYPE# # # # #";
+
+         WRITE(FDEF,90,PT(AOUT));
+
+         WOUT;
+         GO LOOP_ITEM;
+    END;
+
+    CASE ITM_TYP OF
+    BEGIN
+      GRP  :IF ITM_SIG EQL 1
+               THEN RP PA BY "FIELD      "
+               ELSE RP PA BY "GROUP      ";
+            IF ITM_SIG EQL 1
+               THEN RP POUT:POUT BY "FIELD# #"
+               ELSE RP POUT:POUT BY "GROUP# #";
+
+      TYP  :ITM_SIZ:=BLS_ARR[ITM_ADD + NUMTYPES];
+            RP PA BY "RECORD TYPE(",ITM_SIZ FOR 3 DIGITS,")";
+            RP POUT:POUT BY "RECORD TYPE#",
+                            ITM_SIZ FOR 3 DIGITS,
+                            "#";
+      POPN :RP PA BY "POPULATION(",ITM_SIZ FOR 4 DIGITS,")";
+            RP POUT:POUT BY "POPULATION#",
+                            ITM_SIZ FOR 3 DIGITS,
+                            "#";
+
+            RP POUT:POUT BY " # #";
+            WRITE(FDEF,90,PT(AOUT));
+
+            WOUT;
+            K:=BLS_ARR[ITM_ADD + POPOFDATASETSN];
+            RP PT(OUT_ARR) BY " " FOR 51,"OF ",
+               PT(STR_ARR[K,*]) FOR 17,";";
+            WOUT;
+            GO LOOP_ITEM;
+
+      LNK  :RP PA BY "LINK      " ;
+            RP POUT:POUT BY "LINK#",
+                            " #";
+
+      CNT  :RP PA BY "COUNT    (",   ITM_SIZ FOR 4 DIGITS,")";
+            RP POUT:POUT BY "COUNT#",
+                            ITM_SIZ FOR 4 DIGITS,
+                            "#";
+ $ PAGE
+      BOLN :RP PA:PA BY "BOOLEAN  ";
+            RP POUT:POUT BY "BOOLEAN#",
+                            " #";
+      FLD  :RP PA BY "FIELD    (",   ITM_SIZ FOR 4 DIGITS,")";
+            RP POUT:POUT BY "FIELD#",
+                            ITM_SIZ FOR 4 DIGITS,
+                            "#";
+
+      ALPH: RP PA BY "ALPHA    (",   ITM_SIZ FOR 4 DIGITS,")";
+            RP POUT:POUT BY "ALPHA#",
+                            ITM_SIZ FOR 4 DIGITS,
+                            "#";
+      FILLR:RP PA BY "SIZE     (",   ITM_SIZ FOR 4 DIGITS,")";
+            RP POUT:POUT BY "SIZE#",
+                             ITM_SIZ FOR 4 DIGITS,
+                             "#";
+      DECI :
+      DECF :IF ITM_DEC EQL 0 THEN
+            BEGIN
+                 IF ITM_SIG EQL 0
+                    THEN RP PA BY "NUMBER   (",
+                                  ITM_SIZ FOR 4 DIGITS,")"
+                    ELSE RP PA BY "NUMBER   (S",
+                                  ITM_SIZ FOR 3 DIGITS,")";
+                 IF ITM_SIG EQL 0
+                    THEN RP POUT:POUT BY "NUMBER#",
+                                  ITM_SIZ FOR 4 DIGITS,
+                                  "#"
+                    ELSE RP POUT:POUT BY "NUMBERS#",
+                                  ITM_SIZ FOR 3 DIGITS,
+                                  "#";
+            END ELSE
+            BEGIN
+                 IF ITM_SIG EQL 0
+                    THEN RP PA BY "NUMBER  (",
+                                  ITM_SIZ FOR 2 DIGITS,",",
+                                  ITM_DEC FOR 2 DIGITS,")"
+                    ELSE RP PA BY "NUMBER (S",
+                                  ITM_SIZ FOR 2 DIGITS,",",
+                                  ITM_DEC FOR 2 DIGITS,")";
+                 IF ITM_SIG EQL 0
+                    THEN RP POUT:POUT BY  "NUMBER#",
+                                  ITM_SIZ FOR 2 DIGITS,",",
+                                  ITM_DEC FOR 2 DIGITS,"#"
+                    ELSE RP POUT:POUT BY "NUMBERS#",
+                                  ITM_SIZ FOR 2 DIGITS,",",
+                                  ITM_DEC FOR 2 DIGITS,"#";
+            END;
+
+      BINI:
+      BINF :IF ITM_DEC EQL 0 THEN
+            BEGIN
+                 IF ITM_SIG EQL 0
+                    THEN RP PA BY "REAL     (",
+                                  ITM_SIZ FOR 4 DIGITS,")"
+                    ELSE RP PA BY "REAL     (S",
+                                  ITM_SIZ FOR 3 DIGITS,")";
+                 IF ITM_SIG EQL 0
+                    THEN RP POUT:POUT BY "REAL#",
+                                  ITM_SIZ FOR 4 DIGITS,
+                                  "#"
+                    ELSE RP POUT:POUT BY "REALS#",
+                                  ITM_SIZ FOR 3 DIGITS,
+                                  "#";
+            END ELSE
+            BEGIN
+                 IF ITM_SIG EQL 0
+                    THEN RP PA BY "REAL    (",
+                                  ITM_SIZ FOR 2 DIGITS,",",
+                                  ITM_DEC FOR 2 DIGITS,")"
+                    ELSE RP PA BY "REAL   (S",
+                                  ITM_SIZ FOR 2 DIGITS,",",
+                                  ITM_DEC FOR 2 DIGITS,")";
+                 IF ITM_SIG EQL 0
+                    THEN RP POUT:POUT BY "REAL#",
+                                  ITM_SIZ FOR 2 DIGITS,",",
+                                  ITM_DEC FOR 2 DIGITS,"#"
+                    ELSE RP POUT:POUT BY "REALS#",
+                                  ITM_SIZ FOR 2 DIGITS,",",
+                                  ITM_DEC FOR 2 DIGITS,"#";
+            END;
+
+      BFLT: IF BLS_ARR[ITM_ADD + RSNFLD] EQL 1
+            THEN RP PA BY "RSN        "
+            ELSE RP PA BY "REAL       ";
+            IF BLS_ARR[ITM_ADD + RSNFLD] EQL 1
+            THEN RP POUT:POUT BY "RSN# #"
+            ELSE RP POUT:POUT BY "REAL# #";
+
+      ELSE:GO LOOP_ITEM;
+    END;
+
+    IF (BLS_ARR[ITM_ADD + ITEMISKEYF] EQL 1  OR
+        BLS_ARR[ITM_ADD + REQUIREDF ] EQL 1) AND
+        BLS_ARR[ITM_ADD + RSNFLD    ] EQL 0  THEN
+    BEGIN
+         WOUT;
+         RP PT(OUT_ARR) BY " " FOR 55,"REQUIRED"," " FOR 27;
+         RP POUT:POUT BY "RQ#";
+    END
+    ELSE
+    BEGIN
+         RP POUT:POUT BY " #";
+    END;
+
+    IF ITM_OCC EQL 0 AND
+       ITM_VTP EQL 0 AND
+       ITM_INT EQL 0 AND
+       ITM_NUL EQL 0 THEN
+    BEGIN
+         IF ITM_TYP NEQ GRP THEN RP PT(OUT_ARR)+71 BY ";";
+
+         RP POUT:POUT BY " # #";
+         WRITE(FDEF,90,PT(AOUT));
+
+         WOUT;
+         GO LOOP_ITEM;
+    END;
+
+    Q:=0;
+ $ PAGE
+    IF ITM_VTP GTR 0 THEN
+    BEGIN
+         IF ITM_TYP EQL GRP THEN
+         BEGIN
+              SAV_FLG[ITM_LEV]:=Q:=Q + 1;
+              RP  PT(SAV_ARR[ITM_LEV,Q,*]) BY " " FOR 132;
+              PA:=PT(SAV_ARR[ITM_LEV,Q,*])+50;
+         END ELSE
+         BEGIN
+              WOUT;
+              RP  PT(OUT_ARR) BY " " FOR 132;
+              PA:=PT(OUT_ARR)+50;
+         END;
+         IF ITM_VTP.[11:4] GTR 0 THEN
+         BEGIN
+              CASE ITM_VTP.[11:4] OF
+              BEGIN
+                   1: RP PA BY "   STORED OPTIONALLY  ";
+                   2: RP PA BY "STORED OPTIONALLY WITH";
+                ELSE: RP PA BY "   STORED DEPENDING ON";
+              END;
+              IF ITM_VTP.[11:4] NEQ 1 THEN
+                 GET_DEP(BLS_ARR[ITM_ADD + STOREDVARIABLE]);
+         END ELSE
+         IF ITM_VTP.[07:4] EQL 3 THEN
+         BEGIN
+              RP PA BY "     OCCURS ",ITM_OCC FOR * DIGITS;
+              IF ITM_TYP EQL GRP THEN
+              BEGIN
+                  SAV_FLG[ITM_LEV]:=Q:=Q + 1;
+                  RP  PT(SAV_ARR[ITM_LEV,Q,*]) BY " " FOR 132;
+                  PA:=PT(SAV_ARR[ITM_LEV,Q,*])+50;
+              END ELSE
+              BEGIN
+                   WOUT;
+                   RP PT(OUT_ARR) BY " " FOR 132;
+              END;
+              RP PA BY "     DEPENDING ON";
+              GET_DEP(BLS_ARR[ITM_ADD + OCCURSVARIABLE]);
+              ITM_OCC:=0;
+         END ELSE
+         BEGIN
+              CASE ITM_VTP.[03:4] OF
+              BEGIN
+                   1: RP PA BY "   SIZE VARYING       ";
+                   2: RP PA BY "   SIZE VARYING WITH  ";
+                ELSE: RP PA BY "   SIZE DEPENDING ON  ";
+              END;
+              IF ITM_VTP.[03:04] NEQ 1 THEN
+                 GET_DEP(BLS_ARR[ITM_ADD + SIZEVARIABLE]);
+         END;
+    END;
+ $ PAGE
+    IF ITM_OCC EQL 0 AND
+       ITM_NUL EQL 0 AND
+       ITM_INT EQL 0 THEN
+    BEGIN
+         IF ITM_TYP NEQ GRP THEN RP PT(OUT_ARR)+71 BY ";";
+
+         RP POUT:POUT BY " # #";
+         WRITE(FDEF,90,PT(AOUT));
+
+         WOUT;
+         GO LOOP_ITEM;
+    END;
+
+    IF ITM_NUL GTR 0 THEN
+    BEGIN
+         IF ITM_TYP EQL GRP THEN
+         BEGIN
+              SAV_FLG[ITM_LEV]:=Q:=Q + 1;
+              RP  PT(SAV_ARR[ITM_LEV,Q,*]) BY " " FOR 132;
+              PA:=PT(SAV_ARR[ITM_LEV,Q,*])+53;
+         END ELSE
+         BEGIN
+              WOUT;
+              RP PT(OUT_ARR) BY " " FOR 132;
+              PA:=PT(OUT_ARR)+53;
+         END;
+         CASE ITM_NUL OF
+         BEGIN
+              1: RP PA BY "NULL IS LOW-VALUE ";
+              2: RP PA BY "NULL IS HIGH-VALUE";
+              3: RP PA BY "NULL IS ",""",
+                          PT(BLS_ARR[NUL_ADD])FOR NUL_SIZ,""";
+              4: RP PA BY "NULL IS ",
+                          PT(BLS_ARR[NUL_ADD])FOR NUL_SIZ;
+           ELSE: RP PA BY "NULL IS BLANKS    ";
+         END;
+    END;
+
+    IF ITM_OCC EQL 0 AND
+       ITM_INT EQL 0 THEN
+    BEGIN
+         IF ITM_TYP NEQ GRP THEN RP PT(OUT_ARR)+71 BY ";";
+
+         RP POUT:POUT BY " # #";
+         WRITE(FDEF,90,PT(AOUT));
+
+         WOUT;
+         GO LOOP_ITEM;
+    END;
+ $ PAGE
+    IF ITM_INT GTR 0 THEN
+    BEGIN
+         IF ITM_TYP EQL GRP THEN
+         BEGIN
+              SAV_FLG[ITM_LEV]:=Q:=Q + 1;
+              RP  PT(SAV_ARR[ITM_LEV,Q,*]) BY " " FOR 132;
+              PA:=PT(SAV_ARR[ITM_LEV,Q,*])+55;
+         END ELSE
+         BEGIN
+              WOUT;
+              RP PT(OUT_ARR) BY " " FOR 132;
+              PA:=PT(OUT_ARR)+55;
+         END;
+         RP PA BY "INITIALVALUE IS";
+         IF ITM_TYP EQL GRP THEN
+         BEGIN
+              SAV_FLG[ITM_LEV]:=Q:=Q + 1;
+              RP  PT(SAV_ARR[ITM_LEV,Q,*]) BY " " FOR 132;
+              PA:=PT(SAV_ARR[ITM_LEV,Q,*])+55;
+         END ELSE
+         BEGIN
+              WOUT;
+              RP PT(OUT_ARR) BY " " FOR 132;
+              PA:=PT(OUT_ARR)+55;
+         END;
+         CASE ITM_INT OF
+         BEGIN
+              1: RP PA BY "LOW-VALUE ";
+                 RP POUT:POUT BY  "LOW-VALUE#";
+              2: RP PA BY "HIGH-VALUE";
+                 RP POUT:POUT BY  "HIGH-VALUE#";
+              3: RP PA BY """,
+                          PT(BLS_ARR[INT_ADD])FOR INT_SIZ,""";
+                 RP POUT:POUT BY  """,
+                          PT(BLS_ARR[INT_ADD])FOR INT_SIZ,
+                          """,
+                          "#";
+              4: RP PA BY PT(BLS_ARR[INT_ADD])FOR INT_SIZ;
+                 RP POUT:POUT BY  PT(BLS_ARR[INT_ADD])FOR INT_SIZ,
+                                  "#";
+           ELSE: RP PA BY "BLANKS    ";
+                 RP POUT:POUT BY  "BLANKS#";
+         END;
+    END
+    ELSE
+      RP POUT:POUT BY " #";
+
+    IF ITM_OCC EQL 0 THEN
+    BEGIN
+         IF ITM_TYP NEQ GRP THEN RP PT(OUT_ARR)+71 BY ";";
+
+         RP POUT:POUT BY  "0#"  ;
+         WRITE(FDEF,90,PT(AOUT));
+
+         WOUT;
+         GO LOOP_ITEM;
+    END;
+
+    IF ITM_TYP EQL GRP THEN
+    BEGIN
+         WOUT;
+         SAV_FLG[ITM_LEV]:=Q:=Q + 1;
+         RP PT(SAV_ARR[ITM_LEV,Q,*]) BY " " FOR 132;
+         RP PT(SAV_ARR[ITM_LEV,Q,*])+55 BY "OCCURS    ",
+                       ITM_OCC FOR 4 DIGITS,"  ;";
+         RP POUT:POUT BY ITM_OCC FOR 4 DIGITS,
+                         "#" ;
+    END ELSE
+    BEGIN
+         WOUT;
+         RP PT(OUT_ARR) BY " " FOR 132;
+         RP PT(OUT_ARR)+55 BY "OCCURS    ",
+                              ITM_OCC FOR 4 DIGITS,"  ;";
+         RP POUT:POUT BY ITM_OCC FOR 4 DIGITS,
+                         "#" ;
+
+         WOUT;
+    END;
+
+    WRITE(FDEF,90,PT(AOUT));
+
+    GO LOOP_ITEM;
+ $ PAGE
+EXIT:
+    FOR N:=OLD_LEV STEP -1 UNTIL 2 DO
+    BEGIN
+         FOR M:=1 STEP 1 UNTIL SAV_FLG[N] DO
+         BEGIN
+              RP PT(OUT_ARR) BY PT(SAV_ARR[N,M,*]) FOR 132;
+              WOUT;
+         END;
+         RP PT(OUT_ARR)   BY " " FOR 132;
+         Q:=N - 1;
+         IF SAV_FLG[N-1] EQL 0
+            THEN RP PT(OUT_ARR)+Q BY ");"
+            ELSE RP PT(OUT_ARR)+Q BY ") ";
+         WOUT;
+         SAV_FLG[N]:=0;
+    END;
+
+    FOR M:=1 STEP 1 UNTIL SAV_FLG[1] DO
+    BEGIN
+         RP PT(OUT_ARR) BY PT(SAV_ARR[N,M,*]) FOR 132;
+         WOUT;
+    END;
+
+    SAV_FLG[1]:=0;
+
+    IF STR_SBT EQL 4 THEN ELSE
+    BEGIN
+         IF MYSELF.TASKVALUE EQL 0
+            THEN RP PT(OUT_ARR) BY ");"," " FOR 88
+            ELSE RP PT(OUT_ARR) BY ") "," " FOR 88;
+         WOUT;
+    END;
+END;
+ $ PAGE
+%----------------------------------------------------------------------%
+%                        MAIN OF WRITE_DATASET                         %
+%----------------------------------------------------------------------%
+
+    STR_ADD:=LST_DBA + S;
+    BLK_STR:=BLB_ARR[STR_ADD].[NODEBLOCK];
+    LST_STR:=BLB_ARR[STR_ADD].[NODESTRLS];
+    PRP_STR:=BLB_ARR[STR_ADD].[NODEPROLS];
+
+    WRD_ADD:=BEG_BLK + BLK_STR;
+    RED_ADD:=BL0_ARR[WRD_ADD];
+    READ_BLOCK(BLS_ARR,RED_ADD);
+
+    IF F EQL 1 THEN
+       IF BLS_ARR[PRP_STR + LEVELF ] GTR 1 THEN GO EXIT;
+
+    IF BLS_ARR[PRP_STR + LEVELF ] EQL 0 THEN GO EXIT;
+    IF BLS_ARR[PRP_STR + DELETED] EQL 1 THEN GO EXIT;
+    IF BLS_ARR[PRP_STR + TYPEF  ] NEQ 2 THEN GO EXIT;
+
+    RP PT(STR_NAM) BY " " FOR 18;
+    RP PT(STR_DSC) BY " " FOR 36;
+
+    NOF_CHR:=BLS_ARR[PRP_STR + IDENTIFIERSZ];
+    PA     :=PT(BLS_ARR[PRP_STR + WORDONE]) + 1;
+    PB     :=PT(STR_NAM);
+
+    RP PB BY PA FOR NOF_CHR;
+
+    IF BLS_ARR[PRP_STR + DESCTEXT]     GTR 0 AND
+       BLS_ARR[PRP_STR + STRUCTURENUM] GTR 1 THEN
+    BEGIN
+         WRD_ADD:=TXT_BAS + BLS_ARR[PRP_STR + DESCTEXT];
+         NOF_CHR:=MIN(BLS_ARR[WRD_ADD].[47:8],36);
+         PA     :=PT(BLS_ARR[WRD_ADD]) + 1;
+         PB     :=PT(STR_DSC);
+         RP PB BY PA FOR NOF_CHR;
+    END ELSE
+         RP PT(STR_DSC) BY PT(STR_NAM) FOR 18;
+
+    FOR D:=0 STEP 1 UNTIL NOF_DIC DO
+        IF PT(STR_NAM) EQL PT(DIC_ARR[D,*]) FOR 17 THEN
+        BEGIN
+             PA:=PT(STR_DSC);
+             NA:=28;
+             RP PA BY PT(DIC_ARR[D,*])+42 FOR 28;
+             WHILE NA GTR 0 DO
+             BEGIN
+                  SCAN PA:PA FOR NA:NA UNTIL = " ";
+                  NOF_CHR:=28 - NA;
+                  IF NA GTR 0 THEN
+                     SCAN PA:PA FOR NA:NA WHILE = " ";
+             END;
+             D:=NOF_DIC;
+        END;
+ $ PAGE
+    STR_LEV:=BLS_ARR[PRP_STR + LEVELF      ];
+    STR_NUM:=BLS_ARR[PRP_STR + STRUCTURENUM];
+    STR_TYP:=BLS_ARR[PRP_STR + TYPEF       ];
+    STR_SBT:=BLS_ARR[PRP_STR + SUBTYPEF    ];
+
+    STR_VAR:=BLS_ARR[PRP_STR + RTYPESZ        ];
+    STR_RST:=BLS_ARR[PRP_STR + RESTARTDATASETF];
+
+    I:=((80 - NOF_CHR) DIV 2) + 8;
+
+    IF BLS_ARR[PRP_STR + NEWPLATEAU] EQL 1
+       THEN BEXT:=TRUE
+       ELSE BEXT:=FALSE;
+
+    IF STR_LEV EQL 1 THEN
+    BEGIN
+         RP PT(OUT_ARR)   BY PT(TT1_ARR) FOR 132; WOUT;
+         RP PT(OUT_ARR)   BY PT(TT3_ARR) FOR 132; WOUT;
+         RP PT(OUT_ARR)   BY PT(TT3_ARR) FOR 132;
+
+         IF STR_SBT EQL 4
+            THEN RP PT(OUT_ARR)+42 BY "GLOBAL DATA"
+            ELSE RP PT(OUT_ARR)+ I BY PT(STR_DSC) FOR 28;
+         WOUT;
+
+         RP PT(OUT_ARR)   BY PT(TT3_ARR) FOR 132; WOUT;
+         RP PT(OUT_ARR)   BY PT(TT2_ARR) FOR 132; WOUT;
+    END;
+
+    RP PT(AOUT) BY " " FOR 90;
+    POUT:=PT(AOUT);
+
+    RP PT(OUT_ARR)    BY " "         FOR 132;WOUT;
+    RP PT(OUT_ARR)    BY PT(STR_NAM) FOR 18;
+
+    RP POUT:POUT BY "DS#",
+                 PT(STR_NAM) UNTIL EQL " ",
+                 "#",
+                 STR_NUM FOR 3 DIGITS,
+                 "#",
+                 PT(STR_DSC) FOR 28,
+                 "#";
+
+    PA:=PT(OUT_ARR)+25;
+
+    CASE STR_SBT OF
+    BEGIN
+         0: IF STR_RST EQL 0
+               THEN RP PA BY "STANDARD DATA SET "
+               ELSE RP PA BY "RESTART DATA SET  ";
+            IF STR_RST EQL 0
+               THEN RP POUT:POUT BY "STANDARD#"
+               ELSE RP POUT:POUT BY "RESTART#";
+         1: RP PA BY "RANDOM DATA SET   ";
+            RP POUT:POUT BY "RANDOM#";
+         2: RP PA BY "ORDERED DATA SET  ";
+            RP POUT:POUT BY "ORDERED#";
+         3: RP PA BY "UNORDERED DATA SET";
+            RP POUT:POUT BY "UNORDERED#";
+         4: RP PA BY "GLOBAL DATA       ";
+            RP POUT:POUT BY "GLOBAL#";
+         5: RP PA BY "DIRECT DATA SET   ";
+            RP POUT:POUT BY "DIRECT#";
+         6: RP PA BY "COMPACT DATA SET  ";
+            RP POUT:POUT BY "COMPACT#";
+      ELSE: RP PA BY "INVALID DATA SET  ";
+    END;
+
+    RP PT(TAB_ARR) BY PT(STR_NAM) FOR 18,";",
+                      PT(STR_NAM) FOR 18," ",
+                      " "         FOR 58;
+    %%WRITE(FTAB,16,TAB_ARR);
+
+    IF STR_SBT EQL 4 THEN RP PT(OUT_ARR) BY " " FOR 132;
+
+    RP PT(OUT_ARR)+83 BY "STRUCTURE ",STR_NUM FOR 3 DIGITS;
+    WOUT;
+
+    %%WRITE(FDEF, 90, PT(AOUT));
+
+    IF STR_SBT EQL 4 THEN
+    BEGIN
+         RP PT(OUT_ARR) BY " " FOR 132;
+         WOUT;
+    END;
+
+    OLD_LEV:=0;
+    OLD_TYP:=GRP;
+
+    %REPLACE POINTER(STRNAME) BY PT(STR_NAM) FOR 18;
+	IF PT(STR_NAM) EQL POINTER(STRNAME) FOR 17 THEN
+	BEGIN
+		WRITE_ITEM;
+		GO EXIT;
+	END;	
+
+    IF STR_SBT EQL 4 THEN GO EXIT;
+
+    RP PT(OUT_ARR) BY " " FOR 132;
+    WOUT;
+ $ PAGE
+    IF MYSELF.TASKVALUE EQL 0 THEN
+    BEGIN
+         %%WRITE_INDEX;
+         GO EXIT;
+    END;
+
+    IF BLS_ARR[PRP_STR + NEWPLATEAU] EQL 1 THEN
+    BEGIN
+       %%WRITE(OUT_ARR,FEXT);
+       WOUT;
+    END;
+
+    IF BLS_ARR[PRP_STR + INRESIDENTLEVEL] EQL 1 THEN
+    BEGIN
+       %%WRITE(OUT_ARR,FMEM);
+       WOUT;
+    END;
+
+    IF STR_SBT EQL 6 THEN
+    BEGIN
+         %%WRITE(OUT_ARR,FAVR,BLS_ARR[PRP_STR + RECORDSZAVG]- 1);WOUT;
+    END;
+
+    %%WRITE(OUT_ARR,FBLK,BLS_ARR[PRP_STR + BLOCKSZ        ]); WOUT;
+
+    IF BLS_ARR[PRP_STR + SUBBLOCKSZ] GTR 0 THEN
+    BEGIN
+       %%WRITE(OUT_ARR,FSBB,BLS_ARR[PRP_STR + SUBBLOCKSZ]);
+       WOUT;
+    END;
+
+    %WRITE(OUT_ARR,FASZ,BLS_ARR[PRP_STR + AREASZ          ]); WOUT;
+    %WRITE(OUT_ARR,FROW,BLS_ARR[PRP_STR + NUMROWS         ]); WOUT;
+    %WRITE(OUT_ARR,FPOP,BLS_ARR[PRP_STR + POPULATIONF     ]); WOUT;
+    %WRITE(OUT_ARR,FBUF,BLS_ARR[PRP_STR + SYSTEMBUFFERSBIG]); WOUT;
+    %WRITE(OUT_ARR,FSBF,BLS_ARR[PRP_STR + RANDOMBUFFERS   ]); WOUT;
+    %WRITE(OUT_ARR,FRBF,BLS_ARR[PRP_STR + SERIALBUFFERS   ]); WOUT;
+
+    %WRITE_INDEX;
+    GO EXIT;
+
+EXIT:
+END;
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                   DEBUT DU PROGRAMME                   %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+    MYSELF.DISPLAYONLYTOMCS:=TRUE;
+
+    FOUT.NEWFILE:=TRUE;
+
+    FDEF.NEWFILE:=TRUE;
+
+    SEQ_NUM:=1999000;
+    OUT_ADD:=-1;
+
+    RP PT(DBA_TIT) BY " " FOR 60;
+
+    IF NOT GOOD_PARAMETER(EPARM,EUSER,EBASE,EPACK) THEN
+    BEGIN
+         DISPLAY("INVALID PARAMETER");
+         DISPLAY(EPARM);
+         DISPLAY(EUSER);
+         DISPLAY(EBASE);
+         DISPLAY(EPACK);
+         MYSELF.STATUS:=-1;
+    END;
+
+    PB:=PT(DBA_TIT);
+
+    IF EUSER EQL "*" THEN RP PB:PB BY "*" ELSE
+    IF EUSER NEQ " " THEN RP PB:PB BY "(",EUSER UNTIL = " ",")";
+
+    RP PB:PB BY "DESCRIPTION/",EBASE UNTIL = " ";
+
+    IF EPACK NEQ " " THEN RP PB:PB BY " ON ",EPACK UNTIL = " ";
+
+    RP PB:PB BY ".";
+
+    RP FDBA.TITLE BY PT(DBA_TIT);
+
+    RP POINTER(FILE_TIT) BY
+       "DBA/FT/DEFINITIONS/",
+                 EBASE UNTIL = " ",
+                 ".";
+    RP FDEF.TITLE BY PT(FILE_TIT);
+
+    IF NOT FDBA.RESIDENT THEN
+    BEGIN
+         RP PT(MSG_ARR) BY PT(DBA_TIT) UNTIL =".",48"00";
+         DISPLAY(PT(MSG_ARR));
+         DISPLAY("NO DESCRIPTION FILE");
+         MYSELF.STATUS:=-1;
+    END;
+
+    FDBA.OPEN:=TRUE;
+
+    IF FDBA.FILEKIND NEQ VALUE(DASDLDATA) THEN
+    BEGIN
+         DISPLAY("INVALID DESCRIPTIONFILE");
+         MYSELF.STATUS:=-1;
+    END;
+
+    RP PT(OUT_TIT) BY "DBA/DA/IMAGE/",EBASE UNTIL = " ",".";
+    RP FOUT.TITLE  BY PT(OUT_TIT);
+
+    RP PT(TT1_ARR) BY "@","%" FOR 95," " FOR 35;
+    RP PT(TT2_ARR) BY     "%" FOR 96," " FOR 35;
+    RP PT(TT3_ARR) BY     "%" FOR  8," " FOR 80,
+                          "%" FOR  8," " FOR 35;
+
+    DISPLAY(PT(DBA_NAM));
+ $ PAGE
+    PA:=PT(DBA_NAM);
+
+    IF PA EQL "BCSI " OR PA EQL "BCSIT " OR PA EQL "BCSIL " THEN
+    BEGIN
+         RP PT(DIC_TIT) BY "(BBLT)CSI/FP/DICSAV ON BBLTS2.";
+    END ELSE
+    BEGIN
+         IF PA:=PT(DBA_NAM) EQL "B"
+            THEN RP PT(DIC_TIT) BY PA+1 FOR 17 UNTIL = " ",
+                                   "/FP/DICSAV ON BBLTS2."
+            ELSE RP PT(DIC_TIT) BY PA   FOR 18 UNTIL = " ",
+                                   "/FP/DICSAV ON BBLTS2.";
+    END;
+
+    RP FDIC.TITLE BY PT(DIC_TIT);
+
+    IF FDIC.RESIDENT THEN
+    BEGIN
+         DISPLAY(PT(DIC_TIT));
+         WHILE NOT READ(FDIC,14,DIC_ARR[NOF_DIC,*])
+               DO NOF_DIC:=* + 1;
+         NOF_DIC:=* - 1;
+    END ELSE
+         NOF_DIC:=-1;
+
+    READ_BLOCK(BL0_ARR,0);
+
+    BEG_BLK:=BL0_ARR[BLOCKDIRADDR];
+    NOF_BLK:=BL0_ARR[BLOCKDIRSZ] - 2;
+
+    BLK_DBA:=BL0_ARR[DBNODELOC].[NODEBLOCK];
+    LST_DBA:=BL0_ARR[DBNODELOC].[NODESTRLS];
+    PRP_DBA:=BL0_ARR[DBNODELOC].[NODEPROLS];
+
+    WRD_ADD:=BEG_BLK + 1;
+    RED_ADD:=BL0_ARR[WRD_ADD].[NODEPROLS];
+    READ_BLOCK(BLB_ARR,RED_ADD);
+
+    BLB_TXT:=BLB_ARR[TEXTBASELOC];
+
+    NOF_STR:=BLB_ARR[LST_DBA];
+
+    GET_NAMES;
+
+    RP OUT_ARR BY " " FOR 132;
+
+    FOR S:=1 STEP 1 UNTIL NOF_STR DO 
+	BEGIN
+		WRITE_DATASET(S,1);
+	END;	
+
+EXIT:
+    REWIND(FTAB);
+
+    RP PT(TT1_ARR)+1 BY " " FOR 95;
+    WRITE(FOUT[OUT_ADD:=*+1],16,TT1_ARR);
+
+    WHILE NOT READ(FTAB,16,TAB_ARR) DO
+    BEGIN
+         WRITE(FOUT[OUT_ADD:=*+1],16,TAB_ARR);
+    END;
+
+    LOCK(FOUT);
+
+    LOCK(FDEF);
+
+END.
+

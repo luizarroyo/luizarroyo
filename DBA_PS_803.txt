@@ -1,0 +1,558 @@
+00000000% VERSION  3.1   ; SAVED 20190905 11:47:34                    |KKU
+00001000$SET TADS
+00002000% VERSION   2.2  ; SAVED 20100804 10:14:48                    |DCK
+00100000%                       DCCCIII
+00100100%
+00100200%                        ----
+00100300%                      / \    \
+00100400%                     /   \    \
+00100500%                    /  \  \    \
+00100600%                   /  / \  \    \
+00100700%                  /  /  /\  \    \
+00100800%                 /  /  /  \  \    \
+00100900%                /  /  /    \  \    \
+00101000%               /  /  /      \  \    \
+00101100%              /  /  /-----------     \
+00101200%             /  /  -------------------\
+00101300%             \ /                      /
+00101400%              \----------------------/
+00101500%
+00101600%
+01000000$ SET LEVEL 2      LINEINFO
+01001000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01002000
+01003000 PROCEDURE SEARCH_NEW_LEVEL (PARAM_ARR);
+01004000%-----------------------------------------------------
+01005000
+01006000ARRAY   PARAM_ARR[*];
+01007000
+01008000BEGIN
+01009000
+01010000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01011000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01012000%                                                                      %
+01013000%%                                                                    %%
+01014000%%%                         DECLARATIONS                             %%%
+01015000%%                                                                    %%
+01016000%                                                                      %
+01017000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01018000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01019000FILE    DASDL (KIND = DISK, FILETYPE = 7);
+01020000
+01021000ARRAY
+01022000        BL0_ARR           ,             % BLOCK ZERO
+01023000        BLB_ARR     [0: 0],             % BLOCK DATA BASE
+01023100        BLS_ARR     [0: 0];             % BLOCK STRUCTURE
+01024000
+01025000EBCDIC ARRAY
+01026000        WORKARRAY         ,             % ARRAY DE TRAVAIL
+01027000        BAS_ACRNAME       ,             % NOM DES ACCESSROUTINES
+01027100        DAT_DSNAME        ,             % NOM DU DATASET
+01028000        BAS_COMMENT [0:59],             % COMMENTAIRE POUR LA BASE
+01029000        BAS_LEVEL   [0: 5];             % NIVEAU DE SOFTWARE
+01030000
+01031000ARRAY
+01032000        DAS_TIT     [0: 9];             % NOM DE LA DESCRIPTION FILE
+01033000
+01034000INTEGER
+01035000        N,                              % COMPTEUR
+01035100        INXS,                           % INDICE DE BOUCLE STRUCTURE
+01036000        ACR_LN,                         % LONGUEUR NOM DES ACR
+01037000        CMT_LN,                         % LONGUEUR DU COMMENTAIRE
+01038000        DAS_ADD,                        % ADRESSE DISK DESCRIPTION
+01039000        WRD_ADD,                        % INDICE DANS UN BLOCK
+01040000        BEG_BLK,                        % INDICE DEBUT ADDR BLOCK
+01040100        NOF_BLK,                        % NOMBRE DE BLOCKS
+01041000        NOF_STR,                        % NOMBRE DE STRUCTURES
+01041050        OLD_BST,                        % DERNIER BLOCK STRUCTURE LU
+01041100        BLK_DBS,                        % NUMERO BLOCK DATA BASE
+01042000        BLK_STR,                        % NUMERO BLOCK STRUCTURE
+01042100        STR_ADD,                        % INDICE LISTE
+01043000        BEG_LST,                        % INDICE DEBUT LISTE
+01044000        BEG_STR,                        % INDICE DEBUT STRUCTURE
+01045000        BEG_DBS,                        % INDICE DEBUT LISTE DATA BASE
+01046000        BL0_TXT,                        % DEBUT TEXTE BLOCK ZERO
+01047000        BLB_TXT,                        % DEBUT TEXTE BLOCK DATA BASE
+01047100        BLS_TXT,                        % DEBUT TEXTE BLOCK STRUCTURE
+01048000        LVL_DF,                         % UPDATELEVELF
+01049000        REO_REQ,                        % REORGREQ
+01049020        STR_NUM,                        % STRUCTURE NUMBER
+01049040        MAS_NUM;                        % STRUCTURE NUMBER (MASTER)
+01049100
+01049200BOOLEAN
+01049300        DEF_DBNP,                       % DATABASE DEFAULT NEW PLATEAU
+01049400        DEF_DSNP,                       % DATASET DEFAULT NEW PLATEAU
+01049450        DEF_STNP,                       % SET DEFAULT NEW PLATEAU
+01049470        DEF_DSST,                       % DATASET DEFAULT SECTIONED
+01049500        DEF_STST;                       % SET DEFAULT SECTIONED
+01050000
+01051000STRING
+01052000        S,                              % STRING DE TRAVAIL
+01052100        SDFUSR,                         % USERCODE DE LA DF
+01052200        SDFPK,                          % PACK DF
+01053000        SBASE,                          % NOM DE LA BASE
+01054000        SRELID,                         % RELEASEID INFO
+01055000        SRLS,                           % RELEASE ID (APPLICATION)
+01056000        SLEVL;                          % NIVEAU DE SOFTWARE
+01057000
+01058000LABEL
+01059000        EOJ;
+01060000
+01061000POINTER
+01062000        PA,
+01063000        PB,
+01064000        PDAS_TIT;
+01065000
+01066000TRUTHSET
+01067000        QUOPNT(48"7F4B"),               % DELIMITEURS DANS DESC.
+01068000        LPRPST("()*");                  % DELIMITEURS USERCODE
+01069000
+01070000DEFINE
+01071000        NODEBLOCK = 47:16 #,            % NODE: NUMERO DE BLOCK
+01072000        NODESTRLS = 31:16 #,            % NODE: INDICE ADD LISTE
+01073000        NODEPROLS = 15:16 #;            % NODE: INDICE ADD PROP
+01074000
+01075000DEFINE
+01076000        VALCHR  = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890/"#;
+01077000
+01078000$ PAGE
+01079000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01080000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01081000%                                                                      %
+01082000%%                                                                    %%
+01083000%%%          INCLUDE DATABASE/PROPERTIES  20000000-21999999          %%%
+01084000%%                                                                    %%
+01085000%                                                                      %
+01086000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01087000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01088000
+01089000 $ INCLUDE PROPERTIES = "DATABASE/DMS591/PROPERTIES" 20000000-21999999
+01090000
+01091000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01092000$ PAGE
+01093000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01094000%                                                                      %
+01095000%%                                                                    %%
+01096000%%%                            PROCEDURES                            %%%
+01097000%%                                                                    %%
+01098000%                                                                      %
+01099000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01100000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01101000%
+01102000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01103000%                                                                      %
+01104000%               RECHERCHE DU NOM DE LA BASE                            %
+01105000%                                                                      %
+01106000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01107000%
+01108000 BOOLEAN PROCEDURE READ_PAR;
+01109000%---------------------------
+01110000
+01111000BEGIN
+01112000
+01113000  POINTER       PA;
+01114000  INTEGER       N;
+01115000  LABEL         EXIT;
+01116000
+01117000  SCAN PA:POINTER(PARAM_ARR) UNTIL = 48"00";
+01118000  IF N := OFFSET(PA) = 0 THEN GO EXIT;
+01119000
+01120000  S := TAIL(STRING(POINTER(PARAM_ARR[0]),N)," ");
+01120010  IF LENGTH(S) < 1 THEN GO EXIT;
+01120020
+01120030  IF TAKE(S,1) = "*" THEN
+01120040    BEGIN
+01120050      SDFUSR := "*";
+01120060      S      := DROP(S,1);
+01120070    END
+01120080    ELSE
+01120090  IF TAKE(S,1) = "(" THEN
+01120100    BEGIN
+01120110      S      := TAIL(DROP(S,1)," ");
+01120120      SDFUSR := HEAD(S,VALCHR);
+01120130      S      := DROP(TAIL(DROP(S,LENGTH(SDFUSR))," "),1);
+01120140      SDFUSR := "(" !! SDFUSR !! ")";
+01120150    END
+01120160    ELSE
+01120170      SDFUSR := EMPTY;
+01120180
+01120190  S     := TAIL(S," ");
+01120200  SBASE := HEAD(S,VALCHR);
+01120210  IF LENGTH(S) = LENGTH(SBASE) THEN
+01120220    BEGIN
+01120230      READ_PAR := TRUE;
+01120240      GO TO EXIT;
+01120250    END;
+01120260
+01120270  SDFPK := EMPTY;
+01120280
+01120290  S := TAIL(DROP(S,LENGTH(SBASE))," ");
+01120300  IF LENGTH(S) > 2 THEN
+01120310    IF TAKE(S,2) = "ON" THEN
+01120320      BEGIN
+01120330         S := TAIL(DROP(S,2)," ");
+01120340         IF LENGTH(S) > 0 THEN
+01120350           BEGIN
+01120360             SDFPK := " ON " !! HEAD(S,VALCHR);
+01120370             READ_PAR := TRUE;
+01120380           END;
+01120390      END;
+01120400
+01120410EXIT :
+01120420
+01120430END OF READ_PAR;
+01120440
+01120500%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01120510%                                                                      %
+01120520%              LECTURE D UN BLOCK DE LA DESCRIPTION FILE               %
+01120530%                                                                      %
+01120540%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01120550%
+01120560 PROCEDURE READ_A_BLOCK(GET_ARR,DAS_ADD);
+01120570%----------------------------------------
+01120580
+01120590  VALUE         DAS_ADD;
+01120600  ARRAY         GET_ARR[0];
+01120610  INTEGER       DAS_ADD;
+01120620
+01120630BEGIN
+01120640
+01120650  ARRAY         X[0:0];
+01120660  INTEGER       INX,J,N,INXS;
+01120670
+01120680  READ(DASDL[DAS_ADD],1,X);
+01120690
+01120700  N    :=X[DESCBLOCKRECS];
+01120710  INXS :=X[DESCBLOCKRECS] * 256 - 1;
+01120720  J    :=0;
+01120730
+01120740  RESIZE(GET_ARR,INXS,PAGED);
+01120750
+01120760  FOR INX:=1 STEP 1 UNTIL N DO
+01120770    BEGIN
+01120780      READ(DASDL[DAS_ADD],256,GET_ARR[J]);
+01120790      J      :=* + 256;
+01120800      DAS_ADD:=* + 1;
+01120810    END;
+01120820
+01120830END OF READ_A_BLOCK;
+01120840
+01123040%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01123050%                                                                      %
+01123060%               RECHERCHE DES PROPERTIES DES DATASETS                  %
+01123070%                                                                      %
+01123080%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01123090
+01123100 PROCEDURE FIND_DATASET_PROP;
+01123110%----------------------------
+01123120
+01123130BEGIN
+01123140  INTEGER L1,L2;
+01123150
+01123160  L1 := BLS_ARR[BEG_STR + IDENTIFIERSZ];
+01123170  L2 := 18 - L1;
+01123212  REPLACE DAT_DSNAME BY
+01123214   POINTER(BLS_ARR[BEG_STR + WORDONE]) + 1 FOR L1," " FOR L2;
+01123230
+01123410  STR_NUM        := BLS_ARR[BEG_STR + STRUCTURENUM];
+01123420  MAS_NUM        := BLS_ARR[BEG_STR + MASTERSTRUCTURESN];
+01123430
+01123432  IF NOT DEF_DSNP
+01123434   THEN
+01123440    DEF_DSNP     := BLS_ARR[BEG_STR + NEWPLATEAU] > 0;
+01123442
+01123444  IF NOT DEF_DSST
+01123446   THEN
+01123448    DEF_DSST     := BLS_ARR[BEG_STR + PHYSECTIONED] > 0;
+01123450
+01123451% IF BLS_ARR[BEG_STR + NEWPLATEAU] > 0 THEN
+01123456% BEGIN
+01123461%   DISPLAY(STRING(POINTER(BLS_ARR[BEG_STR + WORDONE]) + 1, L1));
+01123466%   DISPLAY(STRING(STR_NUM,*));
+01123471% END;
+01123490
+01123550END OF FIND_DATASET_PROP;
+01123560
+01123570%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01123580%                                                                      %
+01123590%               RECHERCHE DES PROPERTIES DES SETS                      %
+01123600%                                                                      %
+01123610%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01123620
+01123630 PROCEDURE FIND_SET_PROP;
+01123640%------------------------
+01123650
+01123660BEGIN
+01123760
+01123930  STR_NUM        := BLS_ARR[BEG_STR + STRUCTURENUM];
+01123940  MAS_NUM        := BLS_ARR[BEG_STR + MASTERSTRUCTURESN];
+01123950
+01123952  IF NOT DEF_STNP
+01123954   THEN
+01123960    DEF_STNP     := BLS_ARR[BEG_STR + NEWPLATEAU] > 0;
+01123962
+01123964  IF NOT DEF_STST
+01123966   THEN
+01123968    DEF_STST     := BLS_ARR[BEG_STR + PHYSECTIONED] > 0;
+01123970
+01124070END OF FIND_SET_PROP;
+01124080
+01125002%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01125003%                                                                      %
+01125004%               RECHERCHE DE L'ATTRIBUT NEWPLATEAU (STRUCTURE)         %
+01125005%                                                                      %
+01125006%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01125007
+01125010 PROCEDURE STRUCTURE_NX_IN_DESCRIPTION;
+01125015%--------------------------------------
+01125020
+01125025BEGIN
+01125030
+01125035 LABEL
+01125040       LOOP_STR,
+01125045       END_LOOP;
+01125050
+01125055 LOOP_STR :
+01125060
+01125065  IF INXS := * + 1 > NOF_STR THEN GO END_LOOP;
+01125070
+01125075  STR_ADD := BEG_LST + INXS;
+01125080  BLK_STR := BLB_ARR[STR_ADD].[NODEBLOCK];
+01125085  BEG_STR := BLB_ARR[STR_ADD].[NODEPROLS];
+01125090
+01125095  IF BLK_STR NEQ OLD_BST THEN
+01125100    BEGIN
+01125105      OLD_BST := BLK_STR;
+01125110      WRD_ADD := BEG_BLK + BLK_STR;
+01125115      DAS_ADD := BL0_ARR[WRD_ADD];
+01125120      READ_A_BLOCK(BLS_ARR,DAS_ADD);
+01125125      BLS_TXT := BLS_ARR[TEXTBASELOC];
+01125130    END;
+01125135
+01125140  IF BLS_ARR[BEG_STR + LEVELF ] EQL 0 THEN GO LOOP_STR;
+01125145  IF BLS_ARR[BEG_STR + DELETED] EQL 1 THEN GO LOOP_STR;
+01125150
+01125155  IF BLS_ARR[BEG_STR + TYPEF  ] EQL 2 THEN
+01125160    BEGIN
+01125165      FIND_DATASET_PROP;
+01125170      GO LOOP_STR;
+01125175    END;
+01125180
+01125185  IF BLS_ARR[BEG_STR + TYPEF  ] EQL 5 THEN
+01125190    BEGIN
+01125195      FIND_SET_PROP;
+01125200      GO LOOP_STR;
+01125205    END;
+01125210
+01125215  GO LOOP_STR;
+01125220
+01125225 END_LOOP :
+01125230
+01125235END OF STRUCTURE_NX_IN_DESCRIPTION;
+01126000
+01127000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01128000%                                                                      %
+01129000%               RECHERCHE DU NIVEAU DES ACCESSROUTINES                 %
+01130000%                                                                      %
+01131000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01132000
+01133000 PROCEDURE FIND_LEVEL;
+01134000%---------------------
+01135000
+01136000BEGIN
+01137000
+01138000  BOOLEAN OK;
+01139000
+01140000  PA := BAS_ACRNAME[0];
+01141000  PB := WORKARRAY[0];
+01142000  S  := STRING(BAS_ACRNAME[0],1);
+01143000  N  := 60;
+01144000  IF S = "*" THEN
+01145000    PA := * + 1
+01146000    ELSE
+01147000  IF S = "(" THEN
+01148000    BEGIN
+01149000      SCAN PA:PA FOR N:N UNTIL IN LPRPST;
+01150000      PA := * + 1;
+01151000      N  := * - 1;
+01152000    END;
+01153000  SCAN PA:PA FOR N:N UNTIL = "/";
+01154000  IF N > 4 THEN
+01155000    BEGIN
+01156000      PA := * + 1;
+01157000      IF PA = "DMS" FOR 3 THEN
+01158000        BEGIN
+01159000          REPLACE PB:PB BY PA:PA UNTIL = "/";
+01160000          N     := OFFSET(PB);
+01161000          SLEVL := STRING(WORKARRAY[0],N);
+01162000        END;
+01163000    END;
+01164000
+01165000END OF FIND_LEVEL;
+01166000
+01167000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01168000%                                                                      %
+01169000%               RECHERCHE DU NIVEAU DE RELEASE DE L'APPLICATION        %
+01170000%                                                                      %
+01171000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01172000
+01173000 PROCEDURE FIND_RELID;
+01174000%---------------------
+01175000
+01176000BEGIN
+01177000
+01178000  BOOLEAN OK;
+01179000
+01180000  PA := BAS_COMMENT[0];
+01181000  S  := HEAD(TAIL(STRING(PA,CMT_LN)," "),VALCHR);
+01182000  IF N := LENGTH(S) > 0 THEN
+01183000    BEGIN
+01184000      PA := * + N;
+01185000      S  := HEAD(TAIL(STRING(PA,CMT_LN - N)," "),VALCHR);
+01186000      IF LENGTH(S) > 0 THEN
+01187000        SRLS := " RLS" !! S;
+01188000    END;
+01189000  IF SRLS = EMPTY THEN
+01190000    SRLS := " RLS0";
+01191000
+01192000END OF FIND_RELID;
+01193000
+01230000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01231000%                                                                      %
+01232000%               RECHERCHE DES PROPERTIES DE LA BASE                    %
+01233000%                                                                      %
+01234000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01235000
+01236000 PROCEDURE FIND_DATABASE_PROP;
+01237000%-----------------------------
+01238000
+01239000BEGIN
+01240000
+01241000  DAS_ADD := 0;
+01242000  READ_A_BLOCK(BL0_ARR,DAS_ADD);
+01243000  BL0_TXT := BL0_ARR[TEXTBASELOC];
+01244000
+01245000  BEG_BLK := BL0_ARR[BLOCKDIRADDR];
+01246000  NOF_BLK := BL0_ARR[BLOCKDIRSZ] - 2;
+01247000
+01248000  BLK_DBS := BL0_ARR[DBNODELOC].[NODEBLOCK];
+01249000  BEG_LST := BL0_ARR[DBNODELOC].[NODESTRLS];
+01250000  BEG_DBS := BL0_ARR[DBNODELOC].[NODEPROLS];
+01251000
+01252000  WRD_ADD := BEG_BLK + 1;
+01253000  DAS_ADD := BL0_ARR[WRD_ADD].[NODEPROLS];
+01254000  READ_A_BLOCK(BLB_ARR,DAS_ADD);
+01255000  BLB_TXT := BLB_ARR[TEXTBASELOC];
+01256000
+01257000  LVL_DF   := BLB_ARR[BEG_DBS + UPDATELEVELF ];
+01258000
+01259000%-------------------- NOM DES ACCESSROUTINES
+01260000
+01261000  IF WRD_ADD:=BLB_ARR[BEG_DBS + ACRTITLETEXT] NEQ 0 THEN
+01262000    BEGIN
+01263000      WRD_ADD := * + BLB_TXT;
+01264000      PA      := POINTER(BLB_ARR[WRD_ADD]) + 1;
+01265000      PB      := BAS_ACRNAME[0];
+01266000      ACR_LN  := MIN(BLB_ARR[WRD_ADD].[47:8],60);
+01267000      REPLACE PB:PB BY PA:PA FOR ACR_LN;
+01268000    END;
+01269000
+01270000%-------------------- COMMENTAIRES
+01271000
+01272000  IF WRD_ADD := BLB_ARR[BEG_DBS + DESCTEXT] NEQ 0 THEN
+01273000    BEGIN
+01274000      WRD_ADD := * + BLB_TXT;
+01275000      PA      := POINTER(BLB_ARR[WRD_ADD]) + 1;
+01276000      PB      := BAS_COMMENT[0];
+01277000      CMT_LN  := MIN(BLB_ARR[WRD_ADD].[47:8],60);
+01278000      REPLACE PB:PB BY PA:PA FOR CMT_LN;
+01279000    END;
+01279100
+01279200%-------------------- PROPERTIES DATABASE
+01279300
+01279400  DEF_DBNP := BLB_ARR[BEG_DBS + DSNEWPLATEAU] > 0;
+01279500
+01279502%-------------------- PROPERTIES DATASET
+01279504
+01279510  NOF_STR := BLB_ARR[BEG_LST];
+01279520  OLD_BST := (-1);
+01279530  INXS    := 0;
+01279550
+01279560  STRUCTURE_NX_IN_DESCRIPTION;
+01280000
+01280100%--------------------
+01280200
+01281000  FIND_LEVEL;
+01282000  FIND_RELID;
+01283000
+01283020  SRELID := SBASE !! " " !! SLEVL !! " LVL" !! STRING(LVL_DF,*) !!
+01283040            SRLS;
+01283100  IF DEF_DBNP
+01283200   THEN
+01283250    BEGIN
+01283300     SRELID := SRELID !! " " !! "XE(G";
+01283320     IF DEF_DSST
+01283340      THEN
+01283360       SRELID := SRELID !! "S)" !! 48"00"
+01283380      ELSE
+01283400       SRELID := SRELID !! ")" !! 48"00";
+01283420    END
+01283500   ELSE
+01283520    IF DEF_DSNP
+01283540     THEN
+01283560      BEGIN
+01283580       SRELID := SRELID !! " " !! "XE(D";
+01283600       IF DEF_DSST OR DEF_STST
+01283620        THEN
+01283640         SRELID := SRELID !! "S)" !! 48"00"
+01283660        ELSE
+01283680         SRELID := SRELID !! ")" !! 48"00";
+01283700      END
+01283720     ELSE
+01284000    SRELID := SRELID !! " XE(NO)" !! 48"00";
+01286000
+01287000  IF REO_REQ := BLB_ARR[BEG_DBS + REORGREQ     ] > 0 THEN
+01288000    ELSE
+01289000    LVL_DF := 0;
+01290000
+01291000%%% LVL_DF   := BLB_ARR[BEG_DBS + UPDATELEVELF ];
+01292400
+01293000
+01294000END OF FIND_DATABASE_PROP;
+01295000
+01296000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01297000%                                                                      %
+01298000%                             MAIN PROGRAM                             %
+01299000%                                                                      %
+01300000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01301000
+01302000IF NOT READ_PAR THEN
+01303000  BEGIN
+01304000    DISPLAY("MISSING DATABASE NAME");
+01305000    GO TO EOJ;
+01306000  END;
+01307000
+01308000PDAS_TIT    := POINTER(DAS_TIT);        % ASSIGN POINTER
+01309000
+01310000S := SDFUSR !! "DESCRIPTION/" !! SBASE !! SDFPK !! "."; % NOM DE LA DF
+01311000REPLACE PDAS_TIT BY S;
+01312000REPLACE DASDL.TITLE BY PDAS_TIT;
+01313000
+01314000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01315000%                                                                      %
+01316000%               ANALYSE DE LA DESCRIPTION FILE                         %
+01317000%                                                                      %
+01318000%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+01319000
+01320000FIND_DATABASE_PROP;
+01321000
+01322000IF LVL_DF > 0 THEN
+01323000  BEGIN
+01324000    S := "REORGANIZATION :  NEW UPDATE LEVEL = " !! STRING(LVL_DF,*);
+01325000    DISPLAY (S);
+01326000    MYSELF.TASKVALUE := LVL_DF;
+01327000  END;
+01328000
+01329000REPLACE POINTER(PARAM_ARR) BY SRELID;
+01330000
+01331000EOJ : END.

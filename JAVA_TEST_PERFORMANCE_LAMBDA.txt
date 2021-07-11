@@ -1,0 +1,195 @@
+Skip to content
+Why GitHub? 
+Team
+Enterprise
+Explore 
+Marketplace
+Pricing 
+Search
+
+Sign in
+Sign up
+takipi
+/
+loops-jmh-playground
+84632
+Code
+Issues
+1
+Pull requests
+4
+Actions
+Projects
+Security
+Insights
+fixes based on feedback from the community
+
+ fixes (#3)
+@chook
+chook committed on Nov 25, 2015 
+1 parent 3481824 commit d91c55aee2d480c31fa7fad72f6f0b94fb59612e
+Showing  with 29 additions and 21 deletions.
++1 −1  pom.xml
++28 −20  src/main/java/com/takipi/oss/benchmarks/jmh/loops/LoopBenchmarkMain.java
+ 2  pom.xml 
+@@ -35,7 +35,7 @@ THE POSSIBILITY OF SUCH DAMAGE.
+
+    <groupId>com.takipi</groupId>
+    <artifactId>loops-jmh</artifactId>
+    <version>1.0</version>
+    <version>1.1</version>
+    <packaging>jar</packaging>
+
+    <name>JMH benchmark sample: Java</name>
+ 48  src/main/java/com/takipi/oss/benchmarks/jmh/loops/LoopBenchmarkMain.java 
+@@ -3,7 +3,6 @@
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Optional;
+import java.util.Random;
+import java.util.concurrent.TimeUnit;
+
+@@ -20,8 +19,8 @@
+
+@State(Scope.Benchmark)
+public class LoopBenchmarkMain {
+	volatile int size = 100000;
+	volatile List<Integer> integers = null;
+	final int size = 100000;
+	List<Integer> integers = null;
+
+	public static void main(String[] args) {
+		LoopBenchmarkMain benchmark = new LoopBenchmarkMain();
+@@ -31,9 +30,10 @@ public static void main(String[] args) {
+		System.out.println("forEachLoopMaxInteger max is: " + benchmark.forEachLoopMaxInteger());
+		System.out.println("forEachLambdaMaxInteger max is: " + benchmark.forEachLambdaMaxInteger());
+		System.out.println("forMaxInteger max is: " + benchmark.forMaxInteger());
+		System.out.println("forMax2Integer max is: " + benchmark.forMax2Integer());
+		System.out.println("parallelStreamMaxInteger max is: " + benchmark.parallelStreamMaxInteger());
+		System.out.println("streamMaxInteger max is: " + benchmark.streamMaxInteger());
+		System.out.println("iteratorMaxInteger max is: " + benchmark.lambdaMaxInteger());
+		System.out.println("lambdaMaxInteger max is: " + benchmark.lambdaMaxInteger());
+	}
+
+	@Setup
+@@ -45,7 +45,7 @@ public void setup() {
+	public void populate(List<Integer> list) {
+		Random random = new Random();
+		for (int i = 0; i < size; i++) {
+			list.add(random.nextInt(1000000));
+			list.add(Integer.valueOf(random.nextInt(1000000)));
+		}
+	}
+
+@@ -58,7 +58,7 @@ public void populate(List<Integer> list) {
+	public int iteratorMaxInteger() {
+		int max = Integer.MIN_VALUE;
+		for (Iterator<Integer> it = integers.iterator(); it.hasNext(); ) {
+			max = Integer.max(max, it.next());
+			max = Integer.max(max, it.next().intValue());
+		}
+		return max;
+	}
+@@ -72,7 +72,7 @@ public int iteratorMaxInteger() {
+	public int forEachLoopMaxInteger() {
+		int max = Integer.MIN_VALUE;
+		for (Integer n : integers) {
+			max = Integer.max(max, n);
+			max = Integer.max(max, n.intValue());
+		}
+		return max;
+	}
+@@ -87,17 +87,26 @@ public int forEachLambdaMaxInteger() {
+		final Wrapper wrapper = new Wrapper();
+		wrapper.inner = Integer.MIN_VALUE;
+
+		integers.forEach(i -> helper(i, wrapper));
+		return wrapper.inner.intValue();
+		integers.forEach(i -> wrapper.inner = Integer.max(i.intValue(), wrapper.inner));
+		return wrapper.inner;
+	}
+
+	public static class Wrapper {
+		public Integer inner; 
+		public int inner; 
+	}
+
+	private int helper(int i, Wrapper wrapper) {
+		wrapper.inner = Math.max(i, wrapper.inner);
+		return wrapper.inner;
+	@Benchmark
+	@BenchmarkMode(Mode.AverageTime)
+	@OutputTimeUnit(TimeUnit.MILLISECONDS)
+	@Fork(2)
+	@Measurement(iterations = 5)
+	@Warmup(iterations = 5)
+	public int forMaxInteger() {
+		int max = Integer.MIN_VALUE;
+		for (int i = 0; i < size; i++) {
+			max = Integer.max(max, integers.get(i).intValue());
+		}
+		return max;
+	}
+
+	@Benchmark
+@@ -106,10 +115,11 @@ private int helper(int i, Wrapper wrapper) {
+	@Fork(2)
+	@Measurement(iterations = 5)
+	@Warmup(iterations = 5)
+	public int forMaxInteger() {
+	public int forMax2Integer() {
+		int max = Integer.MIN_VALUE;
+		List<Integer> integersLocal = integers;
+		for (int i = 0; i < size; i++) {
+			max = Integer.max(max, integers.get(i));
+			max = Integer.max(max, integersLocal.get(i).intValue());
+		}
+		return max;
+	}
+@@ -121,8 +131,7 @@ public int forMaxInteger() {
+	@Measurement(iterations = 5)
+	@Warmup(iterations = 5)
+	public int parallelStreamMaxInteger() {
+		Optional<Integer> max = integers.parallelStream().reduce(Integer::max);
+		return max.get();
+		return integers.parallelStream().mapToInt(Integer::intValue).reduce(Integer.MIN_VALUE, Integer::max);
+	}
+
+	@Benchmark
+@@ -132,8 +141,7 @@ public int parallelStreamMaxInteger() {
+	@Measurement(iterations = 5)
+	@Warmup(iterations = 5)
+	public int streamMaxInteger() {
+		Optional<Integer> max = integers.stream().reduce(Integer::max);
+		return max.get();
+		return integers.stream().mapToInt(Integer::intValue).reduce(Integer.MIN_VALUE, Integer::max);
+	}
+
+	@Benchmark
+@@ -143,6 +151,6 @@ public int streamMaxInteger() {
+	@Measurement(iterations = 5)
+	@Warmup(iterations = 5)
+	public int lambdaMaxInteger() {
+		return integers.stream().reduce(Integer.MIN_VALUE, (a, b) -> Integer.max(a, b));
+		return integers.stream().mapToInt(Integer::intValue).reduce(Integer.MIN_VALUE, (a, b) -> Integer.max(a, b));
+	}
+}
+1 comment on commit d91c55a
+@TopherTG
+TopherTG commented on d91c55a on Jun 15, 2016 • 
+Thanks pointing out inefficiencies.
+
+Please sign in to comment.
+© 2021 GitHub, Inc.
+Terms
+Privacy
+Security
+Status
+Help
+Contact GitHub
+Pricing
+API
+Training
+Blog
+About

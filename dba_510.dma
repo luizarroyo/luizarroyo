@@ -1,0 +1,677 @@
+% VERSION   1.3;   SAVED 20041122 13:45:58                    |GHJ
+ $ SET LEVEL 2 LINEINFO
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%           @@@@@@@@    @@@@@@@@     @@@@@@@@            %%%%%%%%
+%%%%%%%%           @@@@@@@@@   @@@@@@@@@   @@@@@@@@@@           %%%%%%%%
+%%%%%%%%           @@      @@  @@     @@@  @@      @@           %%%%%%%%
+%%%%%%%%           @@      @@  @@     @@@  @@      @@           %%%%%%%%
+%%%%%%%%           @@      @@  @@@@@@@@@   @@@@@@@@@@           %%%%%%%%
+%%%%%%%%           @@      @@  @@@@@@@@@   @@@@@@@@@@           %%%%%%%%
+%%%%%%%%           @@      @@  @@     @@@  @@      @@           %%%%%%%%
+%%%%%%%%           @@      @@  @@     @@@  @@      @@           %%%%%%%%
+%%%%%%%%           @@@@@@@@@   @@@@@@@@@   @@      @@           %%%%%%%%
+%%%%%%%%           @@@@@@@@    @@@@@@@@    @@      @@           %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%           @@@@@@@@@@      @@        @@@@@@             %%%%%%%%
+%%%%%%%%           @@@@@@@@@@     @@@       @@@@@@@@            %%%%%%%%
+%%%%%%%%           @@            @@@@      @@      @@           %%%%%%%%
+%%%%%%%%           @@              @@      @@      @@           %%%%%%%%
+%%%%%%%%           @@@@@@@@        @@      @@      @@           %%%%%%%%
+%%%%%%%%           @@@@@@@@@       @@      @@      @@           %%%%%%%%
+%%%%%%%%                   @@      @@      @@      @@           %%%%%%%%
+%%%%%%%%           @@@    @@@      @@      @@      @@           %%%%%%%%
+%%%%%%%%            @@@@@@@@      @@@@      @@@@@@@@            %%%%%%%%
+%%%%%%%%             @@@@@@       @@@@       @@@@@@             %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%% GENERATION D'UNE WORKING-STORAGE DE TYPE COBOL74  POUR %%%%%%%%
+%%%%%%%% LES DATASETS D'UNE BASE DE DONNEES; LES NOMS DES ITEMS %%%%%%%%
+%%%%%%%% DE LA W-S AURONT LE MEME NOM QUE CELUI QU'ILS ONT DANS %%%%%%%%
+%%%%%%%% LA BASE.                                               %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%% LA ZONE DEVRA ETRE GARNIE PAR UN MOVE CORRESPONDING.   %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ $ PAGE
+PROCEDURE GEN_C74(PAR_ARR);
+ARRAY         PAR_ARR[*];
+         BEGIN
+FILE          DASDL(KIND       = DISK,
+                    MAXRECSIZE = 256),
+
+              DISK (KIND       = DISK,
+                    MAXRECSIZE = 14,
+                    BLOCKSIZE  = 420,
+                    FILEKIND   = COBOL74SYMBOL);
+
+LONG ARRAY    BL0_ARR[0: 0],            % BLOCK ZERO
+              BLB_ARR[0: 0],            % BLOCK DATA BASE
+              BLS_ARR[0: 0];            % BLOCK STRUCTURE
+
+ARRAY         LIG_ARR[0:13],            % LIGNE COBOL
+              MSG_ARR[0:19],            % MESSAGE DISPLAY
+              DBS_TIT[0:19],            % TITLE DESCRIPTION FILE
+              DSK_TIT[0:19],            % TITLE COBOL FILE
+              STR_ARR[0:999,0:2],       % NOMS DES STRUCT DE LA BASE
+              DMD_ARR[0:999],           % NOM STRUCTURE DEMANDEE
+              SEL_ARR[0:999],           % FLAGS STRUCTURES SELECTIONNEES
+              VAR_LEN[0:256];
+
+POINTER       PA,
+              PB;
+
+BOOLEAN       SEL_BOO,                  % RECHERCHE PAR SELECTION
+              FND_BOO;                  % STRUCTURE TROUVEE
+
+LABEL         END_STR,
+              END_ITM,
+              EXIT;
+
+DEFINE        NODEBLOCK  = 47:16 #,     % NODE: NUMERO DE BLOCK
+              NODESTRLS  = 31:16 #,     % NODE: INDICE ADD LISTE
+              NODEPROLS  = 15:16 #;     % NODE: INDICE ADD PROP
+
+DEFINE        WRITE_DISK = BEGIN
+                                LIN_NUM:=* + 100;
+                                REPLACE POINTER(LIG_ARR) BY
+                                        LIN_NUM FOR 6 DIGITS;
+                                WRITE(DISK,14,LIG_ARR);
+                           END ; #;
+ $ PAGE
+INTEGER       I,                        % INDICE DE BOUCLE
+              N,                        % COMPTEUR
+              S,                        % INDICE DE BOUCLE STRUCTURE
+              LIN_NUM,                  % NUMERO DE LIGNE COBOL
+              DSK_ADD,                  % ADRESSE DISK DESCRIPTION
+              OLD_BST,                  % DERNIER BLOCK STRUCTURE LU
+              OLD_VAR,                  % ANCIENNE APPARTENANCE VARIABLE
+              DBS_CHR,                  % NOMBRE DE CARACTERES DATA BASE
+              NOF_BLK,                  % NOMBRE DE BLOCKS
+              NOF_STR,                  % NOMBRE DE STRUCTURES
+              NOF_ITM,                  % NOMBRE D' ITEMS
+              WRD_ADD,                  % INDICE DANS UN BLOCK
+              BEG_BLK,                  % INDICE DEBUT ADD BLOCKS
+              BLK_DBS,                  % NUMERO BLOCK DATA BASE
+              BEG_DBS,                  % INDICE DEBUT LISTE DATA BASE
+              STR_ADD,                  % INDICE LISTE
+              BLK_STR,                  % NUMERO BLOCK STRUCTURE
+              BEG_STR,                  % INDICE DEBUT STRUCTURE
+              STR_CHR,                  % NOMBRE DE CARACTERES STRUCTURE
+              ITM_NOD,                  % INDICE ADD TETE LISTE ITEMS
+              ITM_PTR,                  % INDICE ADD DANS LISTE ITEMS
+              ITM_ADD,                  % INDICE ADD TETE PROPS ITEMS
+              ITM_VAR,                  % APPARTENANCE VARIABLE
+              ITM_LEV,                  % NIVEAU DE L'ITEM
+              ITM_TYP,                  % TYPE D'ITEM
+              ITM_CHR,                  % NOMBRE DE CARACTERES ITEM
+              ITM_SIZ,                  % LONGUEUR ITEM
+              ITM_OCC,                  % OCCURS ITEM
+              ITM_SIG,                  % ITEM SIGNE
+              ITM_DEC,                  % NOMBRE DE DECIMALES ITEM
+              FLG_VAR,                  % VARIABLE GENERAL ENREGISTRE
+              NOF_VAR,                  % NOMBRE DE VAR
+              VAR_NOD,                  % INDICE ADD TETE LISTE VAR
+              VAR_PTR,                  % INDICE ADD DANS LISTE VAR
+              VAR_ADD,                  % INDICE ADD TETE PROPS VAR
+              VAR_NUM,
+              MAX_VAR,                  % LONGUEUR MAX VARIABLE
+              FIL_LEN;
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%     INCLUDE DATABASE/PROPERTIES  20000000-21999999     %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ $ INCLUDE PROPERTIES = "DATABASE/DMS501/PROPERTIES" 20000000-21999999
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                   LECTURE D'UN BLOCK                   %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+PROCEDURE READ_A_BLOCK(GET_ARR,DSK_ADD);
+VALUE         DSK_ADD;
+ARRAY         GET_ARR[0];
+INTEGER       DSK_ADD;
+         BEGIN
+ARRAY         X[0:0];                   % PREMIER MOT DU BLOCK
+
+INTEGER       I,                        % INDICE DE BOUCLE
+              J,                        % INDICE ADRESSE REC DANS BLOCK
+              N,                        % NOMBRE RECORDS BLOCK 0
+              S;                        % NOMBRE DE MOTS DU BLOCK
+
+              READ(DASDL[DSK_ADD],1,X);
+
+              N:=X[DESCBLOCKRECS];
+              S:=X[DESCBLOCKRECS] * 256 - 1;
+              J:=0;
+
+              RESIZE(GET_ARR,S,DISCARD);
+
+              FOR I:=1 STEP 1 UNTIL N DO
+              BEGIN
+                   READ(DASDL[DSK_ADD],256,GET_ARR[J]);
+                   J      :=* + 256;
+                   DSK_ADD:=* + 1;
+              END;
+         END;
+
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%              VERIFICATION DES PARAMETRES               %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+BOOLEAN PROCEDURE READ_PAR;
+         BEGIN
+INTEGER       NN,                       % NOMBRE DE CARACTERES RESTANTS
+              L1,                       % NOMBRE DE CARACTERES
+              L2,                       % NOMBRE DE BLANCS
+              S ;                       % INDICE BOUCLE STRUCTURES
+
+TRUTHSET      BLKEQL (" ="),
+              BLKCOM (" ,"),
+              ALPDIG ("ABCDEFGHIJKLMNOPQRSTUVWXYZ-/0123456789");
+
+LABEL         END_STR,
+              EXIT;
+
+POINTER       PA,
+              PB;
+
+DEFINE        INV_PAR = BEGIN
+                        REPLACE POINTER(MSG_ARR) BY
+                                "** INVALID PARAMETERS **",48"00";
+                        DISPLAY(POINTER(MSG_ARR));
+                        READ_PAR:=FALSE; GO EXIT;
+                        END; #,
+
+              INV_DBS = BEGIN
+                        REPLACE POINTER(MSG_ARR) BY
+                                "** INVALID DATA BASE **",48"00";
+                        DISPLAY(POINTER(MSG_ARR));
+                        READ_PAR:=FALSE; GO EXIT;
+                        END; #,
+
+              INV_DES = BEGIN
+                        REPLACE POINTER(MSG_ARR) BY
+                                "** NOT A DESC FILE **",48"00";
+                        DISPLAY(POINTER(MSG_ARR));
+                        READ_PAR:=FALSE; GO EXIT;
+                        END; #,
+
+              INV_STR = BEGIN
+                        REPLACE POINTER(MSG_ARR) BY
+                                "** INVALID DATASET **",48"00";
+                        DISPLAY(POINTER(MSG_ARR));
+                        READ_PAR:=FALSE; GO EXIT;
+                        END; #;
+ $ PAGE
+              READ_PAR:=TRUE;
+
+              PA:=POINTER(PAR_ARR);
+              SCAN PA:PA UNTIL = 48"00";
+              IF NN:=OFFSET(PA) = 0 THEN INV_PAR;
+
+              PA:=POINTER(PAR_ARR);
+              PB:=POINTER(DBS_TIT);
+
+              SCAN PA:PA FOR NN:NN WHILE = " ";
+              IF NN LSS   3   THEN INV_PAR;
+              IF PA NEQ "DB=" AND
+                 PA NEQ "DB " THEN INV_PAR;
+
+              PA:=PA + 3;
+              NN:=NN - 3;
+
+              SCAN PA:PA FOR NN:NN WHILE IN BLKEQL;
+              IF NN EQL 0 THEN INV_PAR;
+
+              IF PA = "(" THEN
+              BEGIN
+                   REPLACE PB:PB BY PA:PA FOR NN:NN UNTIL = ")",
+                                    ")DESCRIPTION/";
+                   PA:=PA + 1;
+                   NN:=NN - 1;
+              END ELSE
+              IF PA = "*" THEN
+              BEGIN
+                   REPLACE PB:PB BY "*DESCRIPTION/";
+                   PA:=PA + 1;
+                   NN:=NN - 1;
+              END ELSE
+              BEGIN
+                   REPLACE PB:PB BY "DESCRIPTION/";
+              END;
+
+              SCAN PA:PA FOR NN:NN WHILE = " ";
+              IF NN = 0 THEN INV_PAR;
+
+              REPLACE PB:PB BY PA:PA FOR NN:NN WHILE IN ALPDIG;
+              SCAN    PA:PA          FOR NN:NN WHILE = " ";
+
+              IF NN > 2 THEN IF PA = "ON " THEN
+              BEGIN
+                   PA:=PA + 3;
+                   NN:=NN - 3;
+                   REPLACE PB:PB BY " ON";
+                   SCAN    PA:PA FOR NN:NN WHILE = " ";
+                   REPLACE PB:PB BY " ",PA:PA FOR NN:NN WHILE IN ALPDIG;
+              END;
+
+              REPLACE PB:PB BY ".";
+
+              REPLACE DASDL.TITLE BY POINTER(DBS_TIT);
+              REPLACE POINTER(MSG_ARR) BY "D-FILE TO BE READ: ",
+                      POINTER(DBS_TIT) UNTIL = ".";
+              DISPLAY(POINTER(MSG_ARR));
+
+              IF NOT DASDL.RESIDENT THEN INV_DBS;
+              DASDL.OPEN:=TRUE;
+              IF DASDL.FILEKIND NEQ VALUE(DASDLDATA) THEN INV_DES;
+ $ PAGE
+              DSK_ADD:=0;
+              READ_A_BLOCK(BL0_ARR,0);
+
+              BEG_BLK:=BL0_ARR[BLOCKDIRADDR];
+              NOF_BLK:=BL0_ARR[BLOCKDIRSZ] - 2;
+              BLK_DBS:=BL0_ARR[DBNODELOC].[NODEBLOCK];
+              BEG_DBS:=BL0_ARR[DBNODELOC].[NODESTRLS];
+              WRD_ADD:=BEG_BLK + 1;
+              DSK_ADD:=BL0_ARR[WRD_ADD].[NODEPROLS];
+              READ_A_BLOCK(BLB_ARR,DSK_ADD);
+
+              WRD_ADD:=BL0_ARR[DBNODELOC].[NODEPROLS];
+              DBS_CHR:=BLB_ARR[WRD_ADD + IDENTIFIERSZ];
+
+              REPLACE POINTER(DSK_TIT) BY "DBA/CC/COR/",
+                      POINTER(BLB_ARR[WRD_ADD + 2]) + 1 FOR DBS_CHR,".";
+              REPLACE DISK.TITLE BY DSK_TIT;
+
+              STR_ADD:=BEG_DBS;
+              NOF_STR:=BLB_ARR[STR_ADD];
+
+              SCAN PA:PA FOR NN:NN WHILE IN BLKCOM;
+              IF NN LSS   3   THEN GO EXIT;
+              IF PA NEQ "DS=" AND
+                 PA NEQ "DS " THEN INV_PAR;
+
+              PA:=PA + 3;
+              NN:=NN - 3;
+
+              SCAN PA:PA FOR NN:NN WHILE IN BLKEQL;
+              IF NN EQL 0 THEN GO EXIT;
+
+              SEL_BOO:=TRUE;
+              OLD_BST:=(-1);
+
+              FOR S:=1 STEP 1 UNTIL NOF_STR DO
+              BEGIN
+                   STR_ADD:=STR_ADD + 1;
+                   BLK_STR:=BLB_ARR[STR_ADD].[NODEBLOCK];
+                   BEG_STR:=BLB_ARR[STR_ADD].[NODEPROLS];
+
+                   IF BLK_STR NEQ OLD_BST THEN
+                   BEGIN
+                        OLD_BST:=BLK_STR;
+                        WRD_ADD:=BEG_BLK + BLK_STR;
+                        DSK_ADD:=BL0_ARR[WRD_ADD];
+                        READ_A_BLOCK(BLS_ARR,DSK_ADD);
+                   END;
+
+                   IF BLS_ARR[BEG_STR + TYPEF  ] NEQ 2 THEN GO END_STR;
+                   IF BLS_ARR[BEG_STR + DELETED] NEQ 0 THEN GO END_STR;
+                   IF BLS_ARR[BEG_STR +  LEVELF] EQL 0 AND
+                      BLS_ARR[BEG_STR + GLOBALF] EQL 0 THEN GO END_STR;
+
+                   STR_CHR:=BLS_ARR[BEG_STR + IDENTIFIERSZ];
+                   N      :=18 - STR_CHR;
+
+                   REPLACE POINTER(STR_ARR[S,*]) BY
+                           POINTER(BLS_ARR[BEG_STR+2]) + 1 FOR STR_CHR,
+                           " " FOR N;
+END_STR:      END;
+ $ PAGE
+              WHILE NN GTR 0 DO
+              BEGIN
+                    L1:=NN;
+                    SCAN PB:PA FOR NN:NN WHILE IN ALPDIG;
+
+                    L1:=L1 - NN;
+                    L2:=18 - L1;
+
+                    IF L1 GTR 17 OR L1 EQL 0 THEN INV_PAR;
+
+                    REPLACE POINTER(DMD_ARR) BY
+                            PA:PA FOR L1," " FOR L2;
+
+                    FND_BOO:=FALSE;
+
+                    FOR S:=1 STEP 1 UNTIL NOF_STR DO
+                     IF POINTER(DMD_ARR) =
+                        POINTER(STR_ARR[S,*]) FOR 18 THEN
+                    BEGIN
+                         SEL_ARR[S]:=1;
+                         FND_BOO   :=TRUE;
+                         S         :=NOF_STR;
+                    END;
+
+                    IF NOT FND_BOO THEN INV_STR;
+
+                    SCAN PA:PA FOR NN:NN WHILE IN BLKCOM;
+              END;
+
+              STR_ADD:=BEG_DBS;
+
+EXIT:    END;
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%           PARTIE FIXE D'UN STANDARD VARIABLE           %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+PROCEDURE VAR_V0;
+          BEGIN
+INTEGER       I;
+
+              VAR_NOD:=BLS_ARR[BEG_STR + VFNODE];
+              VAR_PTR:=BLS_ARR[VAR_NOD].[NODESTRLS];
+              NOF_VAR:=BLS_ARR[VAR_PTR];
+              MAX_VAR:=0;
+
+              FOR I:=1 STEP 1 UNTIL NOF_VAR DO
+              BEGIN
+                   VAR_PTR         :=VAR_PTR + 1;
+                   VAR_ADD         :=BLS_ARR[VAR_PTR].[NODEPROLS   ];
+                   VAR_NUM         :=BLS_ARR[VAR_ADD + VFTYPE      ];
+                   VAR_LEN[VAR_NUM]:=BLS_ARR[VAR_ADD + USERRECORDSZ];
+                   VAR_LEN[VAR_NUM]:=(VAR_LEN[VAR_NUM] + 1) DIV 2;
+
+                   IF VAR_LEN[VAR_NUM] > MAX_VAR
+                      THEN MAX_VAR:=VAR_LEN[VAR_NUM];
+              END;
+
+              REPLACE POINTER(LIG_ARR) BY " " FOR 84;
+
+              N:=7 + ((ITM_LEV - 1) * 3);
+              IF N > 19 THEN N:=19;
+
+              PA:=POINTER(LIG_ARR) + N;
+              REPLACE PA:PA BY ITM_LEV FOR 2 DIGITS," ",
+              POINTER(BLS_ARR[BEG_STR + 2]) + 1
+                      FOR STR_CHR,"-V0 ";
+
+              PA:=POINTER(LIG_ARR) + 40;
+              REPLACE PA BY "PIC X(",MAX_VAR FOR * DIGITS,").";
+
+              WRITE_DISK;
+         END;
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%         PARTIE VARIABLE D'UN STANDARD VARIABLE         %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+PROCEDURE VAR_VN;
+          BEGIN
+              IF FIL_LEN GTR 0 THEN
+              BEGIN
+                   REPLACE POINTER(LIG_ARR) BY " " FOR 84;
+                   REPLACE POINTER(LIG_ARR) + 6 BY
+                           "       03 FILLER                  ",
+                           "PIC X(",FIL_LEN FOR * DIGITS,").";
+                   WRITE_DISK;
+                   FIL_LEN:=0;
+              END;
+
+              IF VAR_LEN[ITM_VAR] LSS MAX_VAR
+                 THEN FIL_LEN:=MAX_VAR - VAR_LEN[ITM_VAR];
+
+              REPLACE POINTER(LIG_ARR) BY " " FOR 84;
+
+              N:=7 + ((ITM_LEV - 1) * 3);
+              IF N > 19 THEN N:=19;
+
+              PA:=POINTER(LIG_ARR) + N;
+              REPLACE PA:PA BY ITM_LEV FOR 2 DIGITS," ",
+                      POINTER(BLS_ARR[BEG_STR + 2]) + 1
+                      FOR STR_CHR,"-V",ITM_VAR FOR * DIGITS;
+
+              PA:=POINTER(LIG_ARR) + 40;
+              REPLACE PA BY "REDEFINES";
+              WRITE_DISK;
+
+              REPLACE POINTER(LIG_ARR) BY " " FOR 84;
+
+              PA:=POINTER(LIG_ARR) + N;
+              REPLACE PA:PA BY "   ",
+                      POINTER(BLS_ARR[BEG_STR + 2]) + 1
+                      FOR STR_CHR,"-V0.";
+              WRITE_DISK;
+         END;
+ $ PAGE
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%                      MAIN PROGRAM                      %%%%%%%%
+%%%%%%%%                                                        %%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+              MYSELF.DISPLAYONLYTOMCS:=TRUE;
+
+              IF NOT READ_PAR THEN GO EXIT;
+              OLD_BST:=(-1);
+
+              FOR S:=1 STEP 1 UNTIL NOF_STR DO
+              BEGIN
+                   STR_ADD:=STR_ADD + 1;
+                   IF SEL_BOO AND SEL_ARR[S] = 0 THEN GO END_STR;
+                   BLK_STR:=BLB_ARR[STR_ADD].[NODEBLOCK];
+                   BEG_STR:=BLB_ARR[STR_ADD].[NODEPROLS];
+
+                   IF BLK_STR NEQ OLD_BST THEN
+                   BEGIN
+                        OLD_BST:=BLK_STR;
+                        WRD_ADD:=BEG_BLK + BLK_STR;
+                        DSK_ADD:=BL0_ARR[WRD_ADD];
+                        READ_A_BLOCK(BLS_ARR,DSK_ADD);
+                   END;
+
+                   IF BLS_ARR[BEG_STR + TYPEF  ] NEQ 2 THEN GO END_STR;
+                   IF BLS_ARR[BEG_STR + DELETED] NEQ 0 THEN GO END_STR;
+                   IF BLS_ARR[BEG_STR + LEVELF ] EQL 0 AND
+                      BLS_ARR[BEG_STR + GLOBALF] EQL 0 THEN GO END_STR;
+
+                   STR_CHR:=BLS_ARR[BEG_STR + IDENTIFIERSZ];
+                   N      :=(54 - STR_CHR) DIV 2;
+
+                   REPLACE POINTER(LIG_ARR) BY " " FOR  6,"$ PAGE",
+                                               " " FOR 72;WRITE_DISK;
+                   REPLACE POINTER(LIG_ARR) BY " " FOR  6,"*" FOR 66,
+                                               " " FOR 12; WRITE_DISK;
+
+                   REPLACE POINTER(LIG_ARR) BY "      *"," " FOR 64,
+                                               "*            ";
+                   REPLACE POINTER(LIG_ARR)+7 BY " " FOR N,"DATA FOR ",
+                           POINTER(BLS_ARR[BEG_STR + 2]) + 1
+                           FOR STR_CHR; WRITE_DISK;
+
+                   REPLACE POINTER(LIG_ARR) BY " " FOR  6,"*" FOR 66,
+                                               " " FOR 12; WRITE_DISK;
+
+                   REPLACE POINTER(LIG_ARR) BY " " FOR 84; WRITE_DISK;
+
+                   REPLACE POINTER(LIG_ARR) BY " " FOR 84;
+                   REPLACE POINTER(LIG_ARR) BY "       01 DATA-",
+                           POINTER(BLS_ARR[BEG_STR + 2]) + 1
+                           FOR STR_CHR,"."; WRITE_DISK;
+ $ PAGE
+                   ITM_NOD:=BLS_ARR[BEG_STR + DATAITEMNODE];
+                   ITM_PTR:=BLS_ARR[ITM_NOD].[NODESTRLS];
+                   NOF_ITM:=BLS_ARR[ITM_PTR];
+                   OLD_VAR:=0;
+                   FLG_VAR:=0;
+
+                   FOR I:=1 STEP 1 UNTIL NOF_ITM DO
+                   BEGIN
+                        ITM_PTR:=ITM_PTR + 1;
+                        ITM_ADD:=BLS_ARR[ITM_PTR].[NODEPROLS];
+                        ITM_LEV:=BLS_ARR[ITM_ADD + LEVELF      ];
+                        ITM_TYP:=BLS_ARR[ITM_ADD + TYPEF       ];
+                        ITM_CHR:=BLS_ARR[ITM_ADD + IDENTIFIERSZ];
+                        ITM_OCC:=BLS_ARR[ITM_ADD + OCCURSMAX   ];
+                        ITM_SIG:=BLS_ARR[ITM_ADD + SIGNF       ];
+                        ITM_VAR:=BLS_ARR[ITM_ADD + VFTYPE      ];
+
+                        IF ITM_TYP = ALPH OR ITM_TYP = FILLR THEN
+                        BEGIN
+                             ITM_SIZ:=BLS_ARR[ITM_ADD + TOTALSZ] / 2;
+                             ITM_DEC:=0;
+                        END ELSE
+                        BEGIN
+                             ITM_SIZ:=BLS_ARR[ITM_ADD + DECLAREDLENGTH];
+                             ITM_DEC:=BLS_ARR[ITM_ADD + SCALEFACTOR   ];
+                             ITM_SIZ:=ITM_SIZ - ITM_DEC;
+                             IF ITM_TYP = FLD  OR ITM_TYP = POPN OR
+                                ITM_TYP = TYP  OR ITM_TYP = CNT  THEN
+                                ITM_SIZ:= (ITM_SIZ + 3) DIV 4;
+                        END;
+
+                        IF ITM_VAR NEQ OLD_VAR THEN
+                        BEGIN
+                             OLD_VAR:=ITM_VAR;
+                             IF FLG_VAR = 0 THEN
+                             BEGIN
+                                  FLG_VAR:=1;
+                                  VAR_V0;
+                             END;
+                             VAR_VN;
+                        END;
+
+                        REPLACE POINTER(LIG_ARR) BY " " FOR 84;
+
+                        IF ITM_VAR > 0 THEN ITM_LEV:=* + 1;
+                        IF N:=7 + ((ITM_LEV - 1) * 3) > 19 THEN N:=19;
+
+                        PA:=POINTER(LIG_ARR) + N;
+                        REPLACE PA:PA BY ITM_LEV FOR 2 DIGITS," ";
+
+                        IF ITM_TYP = 20 THEN REPLACE PA:PA BY "C";
+                        IF ITM_TYP = 24 THEN REPLACE PA:PA BY "P";
+                        IF ITM_TYP = 30 THEN REPLACE PA:PA BY "B";
+
+                        REPLACE PA:PA BY POINTER(BLS_ARR[ITM_ADD + 2])
+                                      + 1 FOR ITM_CHR;
+
+                        IF ITM_TYP NEQ GRP
+                           THEN PA:=POINTER(LIG_ARR) + 40;
+ $ PAGE
+                        CASE ITM_TYP OF
+                        BEGIN
+                        GRP :
+                             ;
+
+                        CNT :
+                        TYP :
+                        POPN:
+                        FLD :
+                             BEGIN
+                                  REPLACE PA:PA BY "PIC 9(",
+                                          ITM_SIZ FOR * DIGITS,")";
+                                  PA:=POINTER(LIG_ARR) + 65;
+                                  REPLACE PA:PA BY "COMP";
+                             END;
+
+                        BOLN:
+                             BEGIN
+                                  REPLACE PA:PA BY "PIC 9(01)",
+                                          " " FOR 16,"COMP";
+                             END;
+
+                        ALPH:
+                        FILLR:
+                             BEGIN
+                                  REPLACE PA:PA BY "PIC X(",
+                                          ITM_SIZ FOR * DIGITS,")";
+                             END;
+
+                        DECI:
+                        DECF:
+                        BINI:
+                        BINF:
+                             BEGIN
+                                  REPLACE PA:PA BY "PIC ";
+                                  IF ITM_SIG > 0 THEN
+                                     REPLACE PA:PA BY "S";
+                                  IF ITM_SIZ > 0 THEN
+                                     REPLACE PA:PA BY "9(",
+                                             ITM_SIZ FOR * DIGITS,")";
+                                  IF ITM_DEC > 0 THEN
+                                     REPLACE PA:PA BY "V9(",
+                                             ITM_DEC FOR * DIGITS,")";
+                                  PA:=POINTER(LIG_ARR) + 65;
+                                  IF ITM_TYP = 33 OR ITM_TYP = 34
+                                     THEN REPLACE PA:PA BY "COMP"
+                                     ELSE REPLACE PA:PA BY "BINARY";
+                             END;
+
+                        BFLT:
+                             BEGIN
+                                  REPLACE PA:PA BY "REAL";
+                             END;
+                        ELSE:GO END_ITM;
+                        END;
+ $ PAGE
+                        IF ITM_OCC = 0 THEN REPLACE PA:PA BY ".";
+
+                        WRITE_DISK;
+
+                        IF ITM_OCC > 0 THEN
+                        BEGIN
+                             REPLACE POINTER(LIG_ARR) BY " " FOR 84;
+                             PA:=POINTER(LIG_ARR) + 44;
+                             REPLACE PA:PA BY "OCCURS ",
+                                     ITM_OCC FOR * DIGITS,".";
+                             WRITE_DISK;
+                        END;
+END_ITM:           END;
+
+END_STR:           IF FIL_LEN GTR 0 THEN
+                   BEGIN
+                        REPLACE POINTER(LIG_ARR) BY " " FOR 84;
+                        REPLACE POINTER(LIG_ARR) + 6 BY
+                                "       03 FILLER                  ",
+                                "PIC X(",FIL_LEN FOR * DIGITS,").";
+                        WRITE_DISK;
+                        FIL_LEN:=0;
+                   END;
+              END;
+
+              REPLACE POINTER(LIG_ARR) BY POINTER(DSK_TIT) UNTIL = ".",
+                                          " GENERATED",48"00";
+              DISPLAY(POINTER(LIG_ARR));
+              LOCK(DISK);
+EXIT:    END.
