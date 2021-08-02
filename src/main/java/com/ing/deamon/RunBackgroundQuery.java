@@ -17,13 +17,13 @@ import org.hibernate.Transaction;
 
 import com.ing.connection.JpaUtil;
 import com.ing.connection.McpSqlParameter;
+import com.ing.sql.model.BackgroundQuery;
 import com.ing.sql.model.Environment;
 import com.ing.sql.model.Hostname;
-import com.ing.sql.model.BackgroundQuery;
 import com.ing.sql.model.Parameter;
+import com.ing.sql.repository.BackgroundQueries;
 import com.ing.sql.repository.Environments;
 import com.ing.sql.repository.Hostnames;
-import com.ing.sql.repository.BackgroundQueries;
 import com.ing.sql.repository.Parameters;
 import com.ing.sql.util.ColumnModel;
 import com.ing.sql.util.MessageType;
